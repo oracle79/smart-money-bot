@@ -42,9 +42,15 @@ if __name__ == "__main__":
                 "address": POLYMARKET_EXCHANGE
             })
 
-            for log in logs:
-                tx_hash = log["transactionHash"].hex()
-                send_telegram(f"📦 Log from Polymarket contract\nTx: {tx_hash}")
+            for for log in logs:
+    tx_hash = log["transactionHash"].hex()
+    first_topic = log["topics"][0].hex()
+    
+    send_telegram(
+        f"📦 Log Detected\n"
+        f"Tx: {tx_hash}\n"
+        f"Topic0: {first_topic}"
+    )
 
             last_block = current_block
 
