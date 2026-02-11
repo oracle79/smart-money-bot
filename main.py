@@ -8,13 +8,14 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 POLYGON_RPC = os.getenv("POLYGON_RPC")
 
-# Connect to Polygon
 w3 = Web3(Web3.HTTPProvider(POLYGON_RPC))
 
-# Polymarket Exchange Contract (Polygon Mainnet)
 POLYMARKET_EXCHANGE = Web3.to_checksum_address(
     "0x4bfb41d5b3570defd03c39a9a4d8de6bd8b8982e"
 )
+
+# The repeating Topic0 we discovered
+FILL_TOPIC = "0xd0a08e8c493f9c94f29311604c9de1b4e8c8d4c06bd0c789af57f2d65bfec0f6"
 
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -35,7 +36,7 @@ if __name__ == "__main__":
         exit()
 
     print("✅ Connected to Polygon")
-    send_telegram("🔎 Inspecting Polymarket log Topic0 values...")
+    send_telegram("🎯 Watching ONLY suspected Fill events...")
 
     last_block = w3.eth.block_number
 
@@ -50,17 +51,16 @@ if __name__ == "__main__":
                 logs = w3.eth.get_logs({
                     "fromBlock": last_block + 1,
                     "toBlock": current_block,
-                    "address": POLYMARKET_EXCHANGE
+                    "address": POLYMARKET_EXCHANGE,
+                    "topics": [FILL_TOPIC]
                 })
 
                 for log in logs:
                     tx_hash = log["transactionHash"].hex()
-                    topic0 = "0x" + log["topics"][0].hex()
 
                     message = (
-                        f"📦 Polymarket Log Detected\n"
-                        f"Tx: {tx_hash}\n"
-                        f"Topic0: {topic0}"
+                        f"🎯 Suspected Fill Event\n"
+                        f"Tx: {tx_hash}"
                     )
 
                     print(message)
