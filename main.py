@@ -11,75 +11,19 @@ CHAT_ID = os.getenv("CHAT_ID")
 POLYGON_RPC = os.getenv("POLYGON_RPC")
 
 # ==============================
+# POLYMARKET LEADERBOARD CONFIG
+# ==============================
+LEADERBOARD_API = "https://data-api.polymarket.com/v1/leaderboard"
+TIME_PERIOD = "WEEK"
+LIMIT = 500
+
+# ==============================
 # CONNECT TO POLYGON
 # ==============================
 w3 = Web3(Web3.HTTPProvider(POLYGON_RPC))
 
-# Polymarket Exchange Contract (Polygon Mainnet)
 POLYMARKET_EXCHANGE = Web3.to_checksum_address(
     "0x4bfb41d5b3570defd03c39a9a4d8de6bd8b8982e"
 )
 
-# Suspected Fill Event Topic
-FILL_TOPIC = "0xd0a08e8c493f9c94f29311604c9de1b4e8c8d4c06bd0c789af57f2d65bfec0f6"
-
-def send_telegram(message):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": CHAT_ID,
-        "text": message
-    }
-    try:
-        requests.post(url, data=payload)
-    except Exception as e:
-        print("Telegram error:", e)
-
-if __name__ == "__main__":
-
-    if not w3.is_connected():
-        print("❌ Polygon connection failed")
-        send_telegram("❌ Polygon connection failed")
-        exit()
-
-    print("✅ Connected to Polygon")
-    send_telegram("🎯 Inspecting RAW Fill Event Data...")
-
-    last_block = w3.eth.block_number
-
-    while True:
-        try:
-            current_block = w3.eth.block_number
-
-            if current_block > last_block:
-
-                print(f"Scanning block {current_block}")
-
-                logs = w3.eth.get_logs({
-                    "fromBlock": last_block + 1,
-                    "toBlock": current_block,
-                    "address": POLYMARKET_EXCHANGE,
-                    "topics": [FILL_TOPIC]
-                })
-
-                for log in logs:
-                    tx_hash = log["transactionHash"].hex()
-                    topics = [t.hex() for t in log["topics"]]
-                    data = log["data"]
-
-                    message = (
-                        f"🎯 Fill Event Raw Data\n\n"
-                        f"Tx:\n{tx_hash}\n\n"
-                        f"Topics:\n{topics}\n\n"
-                        f"Data:\n{data}"
-                    )
-
-                    print(message)
-                    send_telegram(message)
-
-                last_block = current_block
-
-            time.sleep(3)
-
-        except Exception as e:
-            print("Error:", e)
-            time.sleep(5)
+FILL_TOPIC = "0xd0a08e8c493f9c94f29311604c9de1b4e8_
