@@ -2,93 +2,98 @@ import os
 import time
 import requests
 from web3 import Web3
-from datetime import datetime, timezone
+from datetime import datetime
 
-# =============================
+# ==============================
 # ENV VARIABLES
-# =============================
+# ==============================
 
-RPC = os.getenv("RPC")
+RPC_URL = os.getenv("RPC_URL")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-if not RPC:
-    raise Exception("RPC not set in Railway variables")
+if not RPC_URL:
+    raise Exception("RPC not set")
 
 if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
     raise Exception("Telegram credentials missing")
 
-# =============================
-# CONNECT WEB3
-# =============================
+# ==============================
+# WEB3 CONNECTION
+# ==============================
 
-w3 = Web3(Web3.HTTPProvider(RPC))
+w3 = Web3(Web3.HTTPProvider(RPC_URL))
 
 if not w3.is_connected():
-    raise Exception("Failed to connect to Polygon RPC")
+    raise Exception("Failed to connect to Polygon")
 
 print("✅ Connected to Polygon")
+print("🧠 Smart Cluster Quant Engine v4 Online")
 
-current_block = w3.eth.block_number
-print(f"📦 Current Block: {current_block}")
+POLYMARKET_CONTRACT = Web3.to_checksum_address(
+    "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"
+)
 
-# =============================
-# TELEGRAM
-# =============================
+# ==============================
+# TELEGRAM FUNCTION
+# ==============================
 
 def send_telegram(message):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": message
+    }
     try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        payload = {
-            "chat_id": TELEGRAM_CHAT_ID,
-            "text": message
-        }
         requests.post(url, data=payload, timeout=10)
     except Exception as e:
         print("Telegram error:", e)
 
-send_telegram("🧠 Smart Cluster Quant Engine v3 Online")
+# ==============================
+# BASIC TRADE DETECTOR
+# ==============================
 
-# =============================
-# SAFE BLOCK POLLER
-# =============================
+last_block = w3.eth.block_number
+print(f"📦 Starting from block {last_block}")
 
-def get_block_safe(block_number):
-    try:
-        return w3.eth.get_block(block_number, full_transactions=True)
-    except Exception as e:
-        print("Block fetch error:", e)
-        return None
+def process_block(block_number):
+    block = w3.eth.get_block(block_number, full_transactions=True)
 
-# =============================
+    for tx in block.transactions:
+        if tx.to and tx.to.lower() == POLYMARKET_CONTRACT.lower():
+
+            wallet = tx["from"]
+            value = w3.from_wei(tx["value"], "ether")
+
+            message = (
+                f"📊 Polymarket Contract Activity\n"
+                f"Block: {block_number}\n"
+                f"Wallet: {wallet}\n"
+                f"Value: {value} MATIC\n"
+                f"Tx: {tx.hash.hex()}\n"
+                f"Time: {datetime.utcnow()}"
+            )
+
+            print("🔥 Polymarket Tx Detected")
+            print(message)
+
+            send_telegram(message)
+
+# ==============================
 # MAIN LOOP
-# =============================
-
-last_checked_block = current_block
-
-print("🚀 Monitoring new blocks...")
+# ==============================
 
 while True:
     try:
-        latest_block = w3.eth.block_number
+        current_block = w3.eth.block_number
 
-        if latest_block > last_checked_block:
-            for block_num in range(last_checked_block + 1, latest_block + 1):
+        if current_block > last_block:
+            for b in range(last_block + 1, current_block + 1):
+                process_block(b)
+            last_block = current_block
 
-                print(f"🔎 Scanning block {block_num}")
-
-                block = get_block_safe(block_num)
-                if block is None:
-                    continue
-
-                for tx in block.transactions:
-                    # Simple logging for now
-                    print("TX:", tx.hash.hex())
-
-            last_checked_block = latest_block
-
-        time.sleep(3)
+        time.sleep(2)
 
     except Exception as e:
-        print("Main loop error:", e)
+        print("Error:", e)
         time.sleep(5)
