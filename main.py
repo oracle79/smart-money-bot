@@ -201,3 +201,27 @@ if __name__ == "__main__":
                         continue
 
                     token_id = data_hex[64:128]
+
+                    market_info = get_market_info(token_id)
+                    if not market_info:
+                        continue
+
+                    trade_history.append({
+                        "time": datetime.now(timezone.utc),
+                        "question": market_info["question"],
+                        "outcome": market_info["outcome"],
+                        "price": market_info["price"],
+                        "token_id": token_id
+                    })
+
+                    check_clusters()
+
+                last_block = current_block
+
+            check_active_clusters()
+
+            time.sleep(5)
+
+        except Exception as e:
+            print("Error:", e)
+            time.sleep(5)
