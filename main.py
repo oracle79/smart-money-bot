@@ -3,20 +3,29 @@ import os
 import time
 import requests
 
-# Environment variables
+# ==============================
+# ENVIRONMENT VARIABLES
+# ==============================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 POLYGON_RPC = os.getenv("POLYGON_RPC")
 
+# ==============================
+# CONNECT TO POLYGON
+# ==============================
 w3 = Web3(Web3.HTTPProvider(POLYGON_RPC))
 
+# Polymarket Exchange Contract (Polygon Mainnet)
 POLYMARKET_EXCHANGE = Web3.to_checksum_address(
     "0x4bfb41d5b3570defd03c39a9a4d8de6bd8b8982e"
 )
 
-# The repeating Topic0 we discovered
+# Suspected Fill Event Topic0
 FILL_TOPIC = "0xd0a08e8c493f9c94f29311604c9de1b4e8c8d4c06bd0c789af57f2d65bfec0f6"
 
+# ==============================
+# TELEGRAM FUNCTION
+# ==============================
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
@@ -28,6 +37,9 @@ def send_telegram(message):
     except Exception as e:
         print("Telegram error:", e)
 
+# ==============================
+# MAIN LOOP
+# ==============================
 if __name__ == "__main__":
 
     if not w3.is_connected():
@@ -36,7 +48,7 @@ if __name__ == "__main__":
         exit()
 
     print("✅ Connected to Polygon")
-    send_telegram("🎯 Watching ONLY suspected Fill events...")
+    send_telegram("🎯 Inspecting RAW Fill Event Data...")
 
     last_block = w3.eth.block_number
 
@@ -56,20 +68,4 @@ if __name__ == "__main__":
                 })
 
                 for log in logs:
-                    tx_hash = log["transactionHash"].hex()
-
-                    message = (
-                        f"🎯 Suspected Fill Event\n"
-                        f"Tx: {tx_hash}"
-                    )
-
-                    print(message)
-                    send_telegram(message)
-
-                last_block = current_block
-
-            time.sleep(3)
-
-        except Exception as e:
-            print("Error:", e)
-            time.sleep(5)
+                    tx_hash = log["transactionHa]()_
