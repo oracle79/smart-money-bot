@@ -23,7 +23,7 @@ if __name__ == "__main__":
         send_telegram("❌ Polygon connection failed")
         exit()
 
-    send_telegram("👀 Watching Polygon blocks...")
+    send_telegram("👀 Watching for Polymarket trades...")
 
     last_block = w3.eth.block_number
 
@@ -31,7 +31,11 @@ if __name__ == "__main__":
         current_block = w3.eth.block_number
 
         if current_block > last_block:
-            send_telegram(f"📦 New block detected: {current_block}")
+            block = w3.eth.get_block(current_block, full_transactions=True)
+
+            # We will filter transactions here next
+            print(f"Scanning block {current_block} with {len(block.transactions)} txs")
+
             last_block = current_block
 
-        time.sleep(5)
+        time.sleep(3)
