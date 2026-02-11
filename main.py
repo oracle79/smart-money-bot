@@ -24,8 +24,8 @@ def send_telegram(message):
     }
     try:
         requests.post(url, data=payload)
-    except:
-        print("Telegram send failed")
+    except Exception as e:
+        print("Telegram error:", e)
 
 if __name__ == "__main__":
 
@@ -35,7 +35,7 @@ if __name__ == "__main__":
         exit()
 
     print("✅ Connected to Polygon")
-    send_telegram("🔎 Watching ALL logs from Polymarket contract...")
+    send_telegram("🔎 Inspecting Polymarket log Topic0 values...")
 
     last_block = w3.eth.block_number
 
@@ -55,7 +55,7 @@ if __name__ == "__main__":
 
                 for log in logs:
                     tx_hash = log["transactionHash"].hex()
-                    topic0 = log["topics"][0].hex()
+                    topic0 = "0x" + log["topics"][0].hex()
 
                     message = (
                         f"📦 Polymarket Log Detected\n"
