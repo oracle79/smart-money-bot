@@ -9,7 +9,6 @@ POLYGON_RPC = os.getenv("POLYGON_RPC")
 
 w3 = Web3(Web3.HTTPProvider(POLYGON_RPC))
 
-# Polymarket CLOB Exchange Contract (Polygon Mainnet)
 POLYMARKET_EXCHANGE = Web3.to_checksum_address(
     "0x4bfb41d5b3570defd03c39a9a4d8de6bd8b8982e"
 )
@@ -28,10 +27,7 @@ if __name__ == "__main__":
         send_telegram("❌ Polygon connection failed")
         exit()
 
-    send_telegram("🎯 Watching Polymarket filled trades...")
-
-    # Event signature for Fill event
-    fill_event_signature = w3.keccak(text="Fill(address,address,uint256,uint256,uint256)").hex()
+    send_telegram("🔎 Watching ALL logs from Polymarket contract...")
 
     last_block = w3.eth.block_number
 
@@ -43,13 +39,12 @@ if __name__ == "__main__":
             logs = w3.eth.get_logs({
                 "fromBlock": last_block + 1,
                 "toBlock": current_block,
-                "address": POLYMARKET_EXCHANGE,
-                "topics": [fill_event_signature]
+                "address": POLYMARKET_EXCHANGE
             })
 
             for log in logs:
                 tx_hash = log["transactionHash"].hex()
-                send_telegram(f"📈 Polymarket Fill Detected\nTx: {tx_hash}")
+                send_telegram(f"📦 Log from Polymarket contract\nTx: {tx_hash}")
 
             last_block = current_block
 
