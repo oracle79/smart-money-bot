@@ -1,2 +1,3 @@
+eth-abi
 requests
 web3
