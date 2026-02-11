@@ -1,13 +1,13 @@
 import os
 import time
 import requests
-import statistics
+import math
 from web3 import Web3
 from datetime import datetime, timedelta
 from collections import defaultdict, deque
 
 # ============================================================
-# ENV VARIABLES
+# ENV
 # ============================================================
 
 RPC = os.getenv("RPC")
@@ -21,20 +21,15 @@ if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
     raise Exception("Telegram credentials missing")
 
 # ============================================================
-# WEB3 SETUP
+# WEB3
 # ============================================================
 
 w3 = Web3(Web3.HTTPProvider(RPC))
-
 if not w3.is_connected():
     raise Exception("Web3 not connected")
 
-print("🧠 Quant Engine Online")
+print("🧠 Smart Cluster Quant Engine v2 Online")
 print("Polygon block:", w3.eth.block_number)
-
-# ============================================================
-# TELEGRAM
-# ============================================================
 
 def send(msg):
     try:
@@ -45,7 +40,7 @@ def send(msg):
     except:
         pass
 
-send("🚀 Institutional Quant Engine Online")
+send("🚀 Smart Wallet Quant Engine v2 Online")
 
 # ============================================================
 # CONTRACT
@@ -60,156 +55,204 @@ FILL_TOPIC = w3.keccak(
 ).hex()
 
 # ============================================================
-# A) TRUE TOKEN SIDE DECODING
+# HELPERS
 # ============================================================
 
-def decode_side_from_price(price):
-    # Polymarket YES price ranges 0→1
-    # If price is high → buying YES
-    # If price is low → buying NO
+def decode_side(price):
     return "YES" if price >= 0.5 else "NO"
 
 # ============================================================
-# B + C) SMART WALLET ENGINE
+# WALLET ENGINE (Pro Scoring)
 # ============================================================
 
 class WalletEngine:
 
     def __init__(self):
-        self.wallet_stats = defaultdict(lambda: {
-            "total_volume": 0,
-            "total_trades": 0,
-            "avg_price": 0,
+        self.stats = defaultdict(lambda: {
+            "volume": 0,
+            "trades": 0,
+            "wins": 0,
+            "losses": 0,
+            "realized_pnl": 0,
+            "returns": [],
+            "positions": {},   # market_id -> entry_price
             "score": 0
         })
 
-    def update(self, wallet, price, size):
+    def update_trade(self, wallet, market_id, side, price, size):
 
-        stats = self.wallet_stats[wallet]
+        s = self.stats[wallet]
 
-        stats["total_volume"] += size
-        stats["total_trades"] += 1
+        s["volume"] += size
+        s["trades"] += 1
 
-        # Running average price
-        stats["avg_price"] = (
-            (stats["avg_price"] * (stats["total_trades"] - 1) + price)
-            / stats["total_trades"]
-        )
+        # If wallet already in position, treat this as exit
+        if market_id in s["positions"]:
+            entry_price = s["positions"][market_id]
+
+            if side == "YES":
+                pnl = (price - entry_price) * size
+            else:
+                pnl = (entry_price - price) * size
+
+            s["realized_pnl"] += pnl
+            s["returns"].append(pnl)
+
+            if pnl > 0:
+                s["wins"] += 1
+            else:
+                s["losses"] += 1
+
+            del s["positions"][market_id]
+
+        else:
+            # open position
+            s["positions"][market_id] = price
 
         self.compute_score(wallet)
 
     def compute_score(self, wallet):
 
-        stats = self.wallet_stats[wallet]
+        s = self.stats[wallet]
 
-        # Institutional scoring logic
-        volume_factor = min(stats["total_volume"] / 5000, 1)
-        activity_factor = min(stats["total_trades"] / 50, 1)
+        if s["trades"] < 30:
+            s["score"] = 0
+            return
 
-        stats["score"] = round((volume_factor * 0.6 + activity_factor * 0.4), 3)
+        win_rate = s["wins"] / max(1, s["wins"] + s["losses"])
+        roi = s["realized_pnl"] / max(1, s["volume"])
 
-    def is_smart_money(self, wallet):
-        return self.wallet_stats[wallet]["score"] > 0.7
+        # Sharpe-style metric
+        if len(s["returns"]) > 5:
+            avg = sum(s["returns"]) / len(s["returns"])
+            variance = sum((x - avg) ** 2 for x in s["returns"]) / len(s["returns"])
+            std = math.sqrt(variance)
+            sharpe = avg / std if std > 0 else 0
+        else:
+            sharpe = 0
+
+        volume_factor = min(s["volume"] / 20000, 1)
+
+        s["score"] = round(
+            (win_rate * 0.3) +
+            (roi * 0.3) +
+            (sharpe * 0.2) +
+            (volume_factor * 0.2),
+            4
+        )
+
+    def is_smart(self, wallet):
+        return self.stats[wallet]["score"] > 0.6
 
 wallet_engine = WalletEngine()
 
 # ============================================================
-# MARKET ENGINE
+# CLUSTER ENGINE (Volume Weighted)
 # ============================================================
 
-class MarketEngine:
+class ClusterEngine:
 
     def __init__(self):
-        self.trades = defaultdict(lambda: deque(maxlen=3000))
-        self.metrics = {}
+        self.trades = defaultdict(lambda: deque(maxlen=300))
+        self.window = 20
+        self.min_wallets = 3
+        self.min_volume = 2000
 
-    def update(self, market_id, price, size, side):
+    def add(self, wallet, market_id, side, size):
+
+        if not wallet_engine.is_smart(wallet):
+            return
 
         self.trades[market_id].append({
-            "price": price,
-            "size": size,
+            "wallet": wallet,
             "side": side,
+            "size": size,
             "time": datetime.utcnow()
         })
 
-        self.compute(market_id)
-
-    def compute(self, market_id):
+    def detect(self, market_id):
 
         now = datetime.utcnow()
-        trades = self.trades[market_id]
-
-        window = [
-            t for t in trades
-            if t["time"] >= now - timedelta(minutes=30)
+        recent = [
+            t for t in self.trades[market_id]
+            if t["time"] >= now - timedelta(minutes=self.window)
         ]
 
-        if not window:
-            return
+        if not recent:
+            return None
 
-        prices = [t["price"] for t in window]
-        total_vol = sum(t["size"] for t in window)
+        yes_wallets = set()
+        no_wallets = set()
+        yes_volume = 0
+        no_volume = 0
 
-        vwap = sum(t["price"] * t["size"] for t in window) / total_vol
-        ret = (prices[-1] - prices[0]) / prices[0] if len(prices) > 1 else 0
-        vol = statistics.stdev(prices) if len(prices) > 1 else 0
+        for t in recent:
+            if t["side"] == "YES":
+                yes_wallets.add(t["wallet"])
+                yes_volume += t["size"]
+            else:
+                no_wallets.add(t["wallet"])
+                no_volume += t["size"]
 
-        yes_vol = sum(t["size"] for t in window if t["side"] == "YES")
-        no_vol = sum(t["size"] for t in window if t["side"] == "NO")
+        if len(yes_wallets) >= self.min_wallets and yes_volume >= self.min_volume:
+            return "YES"
 
-        imbalance = (yes_vol - no_vol) / total_vol if total_vol else 0
+        if len(no_wallets) >= self.min_wallets and no_volume >= self.min_volume:
+            return "NO"
 
-        self.metrics[market_id] = {
-            "vwap": vwap,
-            "return": ret,
-            "vol": vol,
-            "imbalance": imbalance
-        }
+        return None
 
-market_engine = MarketEngine()
+cluster_engine = ClusterEngine()
 
 # ============================================================
-# D) RISK + PAPER EXECUTION ENGINE
+# RISK ENGINE
+# ============================================================
+
+class RiskEngine:
+
+    def __init__(self):
+        self.capital = 1000
+        self.daily_start = 1000
+        self.max_daily_loss = 0.05
+        self.last_reset = datetime.utcnow().date()
+
+    def reset(self):
+        today = datetime.utcnow().date()
+        if today != self.last_reset:
+            self.daily_start = self.capital
+            self.last_reset = today
+
+    def allowed(self):
+        self.reset()
+        loss = (self.daily_start - self.capital) / self.daily_start
+        return loss < self.max_daily_loss
+
+risk = RiskEngine()
+
+# ============================================================
+# PAPER TRADER
 # ============================================================
 
 class PaperTrader:
 
     def __init__(self):
-        self.capital = 10000
-        self.positions = defaultdict(float)
+        self.positions = {}
 
-    def evaluate_signal(self, market_id):
+    def trade(self, market_id, direction):
 
-        m = market_engine.metrics.get(market_id)
-        if not m:
+        if not risk.allowed():
             return
 
-        # Institutional signal logic
-        if m["imbalance"] > 0.6 and m["return"] > 0:
-            self.buy(market_id, 500)
+        size = risk.capital * 0.1
+        risk.capital -= size
 
-        elif m["imbalance"] < -0.6 and m["return"] < 0:
-            self.sell(market_id, 500)
-
-    def buy(self, market_id, size):
-
-        if self.capital < size:
-            return
-
-        self.capital -= size
-        self.positions[market_id] += size
-
-        send(f"📈 PAPER BUY\nMarket: {market_id}\nSize: {size}\nCapital: {round(self.capital,2)}")
-
-    def sell(self, market_id, size):
-
-        if self.positions[market_id] < size:
-            return
-
-        self.capital += size
-        self.positions[market_id] -= size
-
-        send(f"📉 PAPER SELL\nMarket: {market_id}\nSize: {size}\nCapital: {round(self.capital,2)}")
+        send(f"""
+🔥 SMART CLUSTER SIGNAL
+Market: {market_id[:12]}
+Direction: {direction}
+Position Size: {round(size,2)}
+Capital Remaining: {round(risk.capital,2)}
+""")
 
 paper = PaperTrader()
 
@@ -221,7 +264,6 @@ def decode_fill(log):
 
     topics = log["topics"]
     data_hex = log["data"].hex()
-
     chunks = [data_hex[i:i+64] for i in range(0, len(data_hex), 64)]
 
     try:
@@ -235,13 +277,12 @@ def decode_fill(log):
 
     price = taker_amount / maker_amount
     size = maker_amount / 1e6
-
-    side = decode_side_from_price(price)
+    side = decode_side(price)
 
     wallet = "0x" + topics[2].hex()[-40:]
     market_id = topics[1].hex()
 
-    return wallet, market_id, price, size, side
+    return wallet, market_id, side, size, price
 
 # ============================================================
 # MAIN LOOP
@@ -250,7 +291,6 @@ def decode_fill(log):
 last_block = w3.eth.block_number
 
 while True:
-
     try:
         current = w3.eth.block_number
 
@@ -269,15 +309,15 @@ while True:
                 if not decoded:
                     continue
 
-                wallet, market_id, price, size, side = decoded
+                wallet, market_id, side, size, price = decoded
 
-                wallet_engine.update(wallet, price, size)
-                market_engine.update(market_id, price, size, side)
+                wallet_engine.update_trade(wallet, market_id, side, price, size)
+                cluster_engine.add(wallet, market_id, side, size)
 
-                if wallet_engine.is_smart_money(wallet):
-                    send(f"🐳 Smart Wallet Detected\nWallet: {wallet}\nSize: {round(size,2)}")
+                direction = cluster_engine.detect(market_id)
 
-                paper.evaluate_signal(market_id)
+                if direction:
+                    paper.trade(market_id, direction)
 
             last_block = current
 
