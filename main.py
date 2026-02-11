@@ -20,12 +20,9 @@ POLYMARKET_EXCHANGE = Web3.to_checksum_address(
     "0x4bfb41d5b3570defd03c39a9a4d8de6bd8b8982e"
 )
 
-# Suspected Fill Event Topic0
+# Suspected Fill Event Topic
 FILL_TOPIC = "0xd0a08e8c493f9c94f29311604c9de1b4e8c8d4c06bd0c789af57f2d65bfec0f6"
 
-# ==============================
-# TELEGRAM FUNCTION
-# ==============================
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
@@ -37,9 +34,6 @@ def send_telegram(message):
     except Exception as e:
         print("Telegram error:", e)
 
-# ==============================
-# MAIN LOOP
-# ==============================
 if __name__ == "__main__":
 
     if not w3.is_connected():
@@ -68,4 +62,24 @@ if __name__ == "__main__":
                 })
 
                 for log in logs:
-                    tx_hash = log["transactionHa]()_
+                    tx_hash = log["transactionHash"].hex()
+                    topics = [t.hex() for t in log["topics"]]
+                    data = log["data"]
+
+                    message = (
+                        f"🎯 Fill Event Raw Data\n\n"
+                        f"Tx:\n{tx_hash}\n\n"
+                        f"Topics:\n{topics}\n\n"
+                        f"Data:\n{data}"
+                    )
+
+                    print(message)
+                    send_telegram(message)
+
+                last_block = current_block
+
+            time.sleep(3)
+
+        except Exception as e:
+            print("Error:", e)
+            time.sleep(5)
