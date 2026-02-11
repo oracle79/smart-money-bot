@@ -7,6 +7,8 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 POLYGON_RPC = os.getenv("POLYGON_RPC")
 
+w3 = Web3(Web3.HTTPProvider(POLYGON_RPC))
+
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
@@ -16,12 +18,168 @@ def send_telegram(message):
     requests.post(url, data=payload)
 
 if __name__ == "__main__":
-    w3 = Web3(Web3.HTTPProvider(POLYGON_RPC))
 
-    if w3.is_connected():
-        send_telegram("✅ Connected to Polygon successfully!")
-    else:
-        send_telegram("❌ Failed to connect to Polygon.")
+    if not w3.is_connected():
+        send_telegram("❌ Polygon connection failed")
+        exit()
+
+    send_telegram("👀 Watching Polygon blocks...")
+
+    last_block = w3.eth.block_number
 
     while True:
-        time.sleep(60)
+        current_block = w3.eth.block_number
+
+        if current_block > last_block:
+            send_telegram(f"📦 New block detected: {current_block}")
+            last_block = current_block
+
+        time.sleep(5)
+from web3 import Web3
+import os
+import time
+import requests
+
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
+POLYGON_RPC = os.getenv("POLYGON_RPC")
+
+w3 = Web3(Web3.HTTPProvider(POLYGON_RPC))
+
+def send_telegram(message):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": message
+    }
+    requests.post(url, data=payload)
+
+if __name__ == "__main__":
+
+    if not w3.is_connected():
+        send_telegram("❌ Polygon connection failed")
+        exit()
+
+    send_telegram("👀 Watching Polygon blocks...")
+
+    last_block = w3.eth.block_number
+
+    while True:
+        current_block = w3.eth.block_number
+
+        if current_block > last_block:
+            send_telegram(f"📦 New block detected: {current_block}")
+            last_block = current_block
+
+        time.sleep(5)
+from web3 import Web3
+import os
+import time
+import requests
+
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
+POLYGON_RPC = os.getenv("POLYGON_RPC")
+
+w3 = Web3(Web3.HTTPProvider(POLYGON_RPC))
+
+def send_telegram(message):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": message
+    }
+    requests.post(url, data=payload)
+
+if __name__ == "__main__":
+
+    if not w3.is_connected():
+        send_telegram("❌ Polygon connection failed")
+        exit()
+
+    send_telegram("👀 Watching Polygon blocks...")
+
+    last_block = w3.eth.block_number
+
+    while True:
+        current_block = w3.eth.block_number
+
+        if current_block > last_block:
+            send_telegram(f"📦 New block detected: {current_block}")
+            last_block = current_block
+
+        time.sleep(5)
+from web3 import Web3
+import os
+import time
+import requests
+
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
+POLYGON_RPC = os.getenv("POLYGON_RPC")
+
+w3 = Web3(Web3.HTTPProvider(POLYGON_RPC))
+
+def send_telegram(message):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": message
+    }
+    requests.post(url, data=payload)
+
+if __name__ == "__main__":
+
+    if not w3.is_connected():
+        send_telegram("❌ Polygon connection failed")
+        exit()
+
+    send_telegram("👀 Watching Polygon blocks...")
+
+    last_block = w3.eth.block_number
+
+    while True:
+        current_block = w3.eth.block_number
+
+        if current_block > last_block:
+            send_telegram(f"📦 New block detected: {current_block}")
+            last_block = current_block
+
+        time.sleep(5)
+from web3 import Web3
+import os
+import time
+import requests
+
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
+POLYGON_RPC = os.getenv("POLYGON_RPC")
+
+w3 = Web3(Web3.HTTPProvider(POLYGON_RPC))
+
+def send_telegram(message):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": message
+    }
+    requests.post(url, data=payload)
+
+if __name__ == "__main__":
+
+    if not w3.is_connected():
+        send_telegram("❌ Polygon connection failed")
+        exit()
+
+    send_telegram("👀 Watching Polygon blocks...")
+
+    last_block = w3.eth.block_number
+
+    while True:
+        current_block = w3.eth.block_number
+
+        if current_block > last_block:
+            send_telegram(f"📦 New block detected: {current_block}")
+            last_block = current_block
+
+        time.sleep(5)
