@@ -2,9 +2,8 @@ from web3 import Web3
 import os
 import time
 import requests
-from collections import defaultdict
-from datetime import datetime, timedelta
 import random
+from datetime import datetime, timedelta, timezone
 
 # ==============================
 # ENVIRONMENT VARIABLES
@@ -14,28 +13,22 @@ CHAT_ID = os.getenv("CHAT_ID")
 POLYGON_RPC = os.getenv("POLYGON_RPC")
 
 # ==============================
-# CAPITAL & RISK SETTINGS
+# BASIC SETTINGS
 # ==============================
-STARTING_CAPITAL = 1000.0
+STARTING_CAPITAL = 1000
 capital = STARTING_CAPITAL
 
-MAX_RISK_PER_TRADE = 0.02       # 2%
-MAX_DAILY_LOSS = 0.05           # 5%
-FRACTIONAL_KELLY = 0.25
-
-daily_loss = 0
-wins = 0
-losses = 0
-
-# ==============================
-# SIGNAL SETTINGS
-# ==============================
-MIN_USDC_SIZE = 100
-CLUSTER_WINDOW_SECONDS = 300
+MAX_RISK_PER_TRADE = 0.02          # 2% max risk
+MAX_DAILY_LOSS = 0.05              # 5% daily stop
+CLUSTER_WINDOW_SECONDS = 300       # 5 minutes
+MIN_TRADE_SIZE = 100               # $100 minimum
 MIN_WALLETS_FOR_CLUSTER = 3
 
+daily_loss = 0
+last_reset_day = datetime.now(timezone.utc).date()
+
 # ==============================
-# CONNECT WEB3
+# CONNECT TO POLYGON
 # ==============================
 w3 = Web3(Web3.HTTPProvider(POLYGON_RPC))
 
@@ -46,99 +39,100 @@ POLYMARKET_EXCHANGE = Web3.to_checksum_address(
 FILL_TOPIC = "0xd0a08e8c493f9c94f29311604c9de1b4e8c8d4c06bd0c789af57f2d65bfec0f6"
 
 # ==============================
-# TELEGRAM
+# TELEGRAM FUNCTION
 # ==============================
 def send_telegram(message):
-    if TELEGRAM_TOKEN is None:
-        print(message)
+    if not TELEGRAM_TOKEN or not CHAT_ID:
+        print("Telegram not configured")
         return
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": CHAT_ID, "text": message}
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": message
+    }
 
     try:
-        requests.post(url, data=payload)
-    except:
-        pass
+        requests.post(url, data=payload, timeout=10)
+    except Exception as e:
+        print("Telegram error:", e)
 
 # ==============================
-# SMART WALLET FETCH
+# LOAD SMART WALLETS
 # ==============================
-def fetch_smart_wallets():
-    try:
-        response = requests.get(
-            "https://data-api.polymarket.com/v1/leaderboard",
-            params={"timePeriod": "WEEK", "orderBy": "PNL", "limit": 500},
-            timeout=10
-        )
-        data = response.json()
-    except:
-        return set()
-
+def load_smart_wallets():
     wallets = set()
-    for trader in data:
-        wallet = trader.get("proxyWallet")
-        if wallet:
-            wallets.add(wallet.lower())
-
+    try:
+        with open("smart_wallets.txt", "r") as f:
+            for line in f:
+                wallets.add(line.strip().lower())
+    except:
+        print("No smart_wallets.txt found — using empty set")
     return wallets
 
-SMART_WALLETS = fetch_smart_wallets()
+smart_wallets = load_smart_wallets()
+print(f"Loaded {len(smart_wallets)} smart wallets")
 
 # ==============================
-# CLUSTER ENGINE
+# TRADE MEMORY FOR CLUSTERING
 # ==============================
 recent_trades = []
 
-def clean_old_trades():
-    cutoff = datetime.utcnow() - timedelta(seconds=CLUSTER_WINDOW_SECONDS)
-    return [t for t in recent_trades if t["time"] > cutoff]
-
-def calculate_position_size(edge_estimate=0.05):
-    global capital
-
-    if wins + losses < 10:
-        kelly_fraction = MAX_RISK_PER_TRADE
-    else:
-        win_rate = wins / (wins + losses)
-        b = 1  # assume 1:1 payoff
-        kelly = (win_rate * (b + 1) - 1) / b
-        kelly_fraction = max(0, kelly * FRACTIONAL_KELLY)
-
-    kelly_fraction = min(kelly_fraction, MAX_RISK_PER_TRADE)
-    return capital * kelly_fraction
+# ==============================
+# SAFE SIZE CALCULATION
+# ==============================
+def calculate_position_size():
+    return capital * MAX_RISK_PER_TRADE
 
 # ==============================
-# PAPER TRADING ENGINE
+# DAILY RESET
 # ==============================
-open_positions = []
+def check_daily_reset():
+    global daily_loss, last_reset_day
+    today = datetime.now(timezone.utc).date()
+    if today != last_reset_day:
+        daily_loss = 0
+        last_reset_day = today
 
-def simulate_trade(signal_score):
-    global capital, wins, losses, daily_loss
+# ==============================
+# PAPER TRADE EXECUTION
+# ==============================
+def execute_paper_trade():
+    global capital, daily_loss
 
     if daily_loss >= STARTING_CAPITAL * MAX_DAILY_LOSS:
-        print("Daily loss limit hit. No trading.")
+        print("Daily loss limit reached. Trading halted.")
         return
 
     position_size = calculate_position_size()
 
-    if position_size <= 0:
-        return
-
-    # Placeholder simulated outcome
-    win_probability = min(0.5 + signal_score / 200, 0.75)
-
-    if random.random() < win_probability:
-        profit = position_size
+    # Simulated 55% win probability (temporary until real edge measured)
+    if random.random() < 0.55:
+        profit = position_size * 1.0
         capital += profit
-        wins += 1
         send_telegram(f"📈 PAPER WIN +${profit:.2f} | Capital: ${capital:.2f}")
     else:
         loss = position_size
         capital -= loss
         daily_loss += loss
-        losses += 1
         send_telegram(f"📉 PAPER LOSS -${loss:.2f} | Capital: ${capital:.2f}")
+
+# ==============================
+# CLUSTER CHECK
+# ==============================
+def check_cluster():
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(seconds=CLUSTER_WINDOW_SECONDS)
+
+    valid_trades = [t for t in recent_trades if t["time"] > cutoff]
+
+    if len(valid_trades) >= MIN_WALLETS_FOR_CLUSTER:
+        send_telegram(
+            f"🚨 CLUSTER DETECTED\n"
+            f"Wallets: {len(valid_trades)}\n"
+            f"Capital: ${capital:.2f}"
+        )
+        execute_paper_trade()
 
 # ==============================
 # MAIN LOOP
@@ -147,6 +141,7 @@ if __name__ == "__main__":
 
     if not w3.is_connected():
         print("Polygon connection failed")
+        send_telegram("❌ Polygon connection failed")
         exit()
 
     send_telegram("🚀 Paper Trading Engine Started")
@@ -155,6 +150,8 @@ if __name__ == "__main__":
 
     while True:
         try:
+            check_daily_reset()
+
             current_block = w3.eth.block_number
 
             if current_block > last_block:
@@ -167,37 +164,43 @@ if __name__ == "__main__":
                 })
 
                 for log in logs:
+
                     topics = [t.hex() for t in log["topics"]]
+
+                    if len(topics) < 4:
+                        continue
+
+                    maker = "0x" + topics[2][-40:]
                     taker = "0x" + topics[3][-40:]
 
-                    if taker.lower() not in SMART_WALLETS:
+                    # Simulated trade size (replace with real decoding later)
+                    trade_size = random.uniform(50, 500)
+
+                    if trade_size < MIN_TRADE_SIZE:
                         continue
 
-                    data_hex = log["data"].hex()
-                    chunks = [data_hex[i:i+64] for i in range(0, len(data_hex), 64)]
+                    if maker.lower() in smart_wallets or taker.lower() in smart_wallets:
 
-                    if len(chunks) < 4:
-                        continue
+                        tx_hash = log["transactionHash"].hex()
 
-                    raw_amount = int(chunks[3], 16)
-                    usdc_amount = raw_amount / 1_000_000
+                        send_telegram(
+                            f"🚨 SMART WALLET TRADE\n"
+                            f"Maker: {maker}\n"
+                            f"Taker: {taker}\n"
+                            f"Size: ${trade_size:.2f}\n"
+                            f"https://polygonscan.com/tx/{tx_hash}"
+                        )
 
-                    if usdc_amount < MIN_USDC_SIZE:
-                        continue
+                        recent_trades.append({
+                            "time": datetime.now(timezone.utc)
+                        })
 
-                    recent_trades.append({
-                        "wallet": taker,
-                        "market": topics[1],
-                        "time": datetime.utcnow()
-                    })
+                        check_cluster()
 
-                    recent_trades[:] = clean_old_trades()
+                last_block = current_block
 
-                    grouped = defaultdict(list)
-                    for trade in recent_trades:
-                        grouped[trade["market"]].append(trade)
+            time.sleep(3)
 
-                    for market, trades in grouped.items():
-                        unique_wallets = set(t["wallet"] for t in trades)
-
-                        if
+        except Exception as e:
+            print("Error:", e)
+            time.sleep(5)
