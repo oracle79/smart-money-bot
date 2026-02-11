@@ -4,6 +4,7 @@ import time
 import requests
 from collections import defaultdict
 from datetime import datetime, timedelta
+import random
 
 # ==============================
 # ENVIRONMENT VARIABLES
@@ -13,12 +14,22 @@ CHAT_ID = os.getenv("CHAT_ID")
 POLYGON_RPC = os.getenv("POLYGON_RPC")
 
 # ==============================
-# CONFIG
+# CAPITAL & RISK SETTINGS
 # ==============================
-LEADERBOARD_API = "https://data-api.polymarket.com/v1/leaderboard"
-TIME_PERIOD = "WEEK"
-LIMIT = 500
+STARTING_CAPITAL = 1000.0
+capital = STARTING_CAPITAL
 
+MAX_RISK_PER_TRADE = 0.02       # 2%
+MAX_DAILY_LOSS = 0.05           # 5%
+FRACTIONAL_KELLY = 0.25
+
+daily_loss = 0
+wins = 0
+losses = 0
+
+# ==============================
+# SIGNAL SETTINGS
+# ==============================
 MIN_USDC_SIZE = 100
 CLUSTER_WINDOW_SECONDS = 300
 MIN_WALLETS_FOR_CLUSTER = 3
@@ -37,34 +48,31 @@ FILL_TOPIC = "0xd0a08e8c493f9c94f29311604c9de1b4e8c8d4c06bd0c789af57f2d65bfec0f6
 # ==============================
 # TELEGRAM
 # ==============================
-
 def send_telegram(message):
+    if TELEGRAM_TOKEN is None:
+        print(message)
+        return
+
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": CHAT_ID,
-        "text": message
-    }
+    payload = {"chat_id": CHAT_ID, "text": message}
+
     try:
         requests.post(url, data=payload)
-    except Exception as e:
-        print("Telegram error:", e)
+    except:
+        pass
 
 # ==============================
-# LOAD SMART WALLETS
+# SMART WALLET FETCH
 # ==============================
-
 def fetch_smart_wallets():
-    params = {
-        "timePeriod": TIME_PERIOD,
-        "orderBy": "PNL",
-        "limit": LIMIT
-    }
-
     try:
-        response = requests.get(LEADERBOARD_API, params=params, timeout=10)
+        response = requests.get(
+            "https://data-api.polymarket.com/v1/leaderboard",
+            params={"timePeriod": "WEEK", "orderBy": "PNL", "limit": 500},
+            timeout=10
+        )
         data = response.json()
-    except Exception as e:
-        print("Leaderboard fetch error:", e)
+    except:
         return set()
 
     wallets = set()
@@ -73,63 +81,75 @@ def fetch_smart_wallets():
         if wallet:
             wallets.add(wallet.lower())
 
-    print(f"Loaded {len(wallets)} smart wallets")
     return wallets
+
+SMART_WALLETS = fetch_smart_wallets()
 
 # ==============================
 # CLUSTER ENGINE
 # ==============================
-
 recent_trades = []
 
 def clean_old_trades():
-    global recent_trades
     cutoff = datetime.utcnow() - timedelta(seconds=CLUSTER_WINDOW_SECONDS)
-    recent_trades = [t for t in recent_trades if t["time"] > cutoff]
+    return [t for t in recent_trades if t["time"] > cutoff]
 
-def check_clusters():
-    market_groups = defaultdict(list)
+def calculate_position_size(edge_estimate=0.05):
+    global capital
 
-    for trade in recent_trades:
-        key = (trade["market"], trade["direction"])
-        market_groups[key].append(trade)
+    if wins + losses < 10:
+        kelly_fraction = MAX_RISK_PER_TRADE
+    else:
+        win_rate = wins / (wins + losses)
+        b = 1  # assume 1:1 payoff
+        kelly = (win_rate * (b + 1) - 1) / b
+        kelly_fraction = max(0, kelly * FRACTIONAL_KELLY)
 
-    for key, trades in market_groups.items():
-        unique_wallets = set(t["wallet"] for t in trades)
-
-        if len(unique_wallets) >= MIN_WALLETS_FOR_CLUSTER:
-            total_size = sum(t["size"] for t in trades)
-
-            cluster_score = len(unique_wallets) * 10 + total_size * 0.01
-
-            message = (
-                f"🚨 CLUSTER DETECTED\n\n"
-                f"Market: {key[0]}\n"
-                f"Direction: {key[1]}\n"
-                f"Wallets: {len(unique_wallets)}\n"
-                f"Total Size: ${total_size:,.2f}\n"
-                f"Cluster Score: {cluster_score:.2f}"
-            )
-
-            send_telegram(message)
-
-            # Clear trades to avoid duplicate alerts
-            recent_trades.clear()
-            break
+    kelly_fraction = min(kelly_fraction, MAX_RISK_PER_TRADE)
+    return capital * kelly_fraction
 
 # ==============================
-# MAIN
+# PAPER TRADING ENGINE
 # ==============================
+open_positions = []
 
+def simulate_trade(signal_score):
+    global capital, wins, losses, daily_loss
+
+    if daily_loss >= STARTING_CAPITAL * MAX_DAILY_LOSS:
+        print("Daily loss limit hit. No trading.")
+        return
+
+    position_size = calculate_position_size()
+
+    if position_size <= 0:
+        return
+
+    # Placeholder simulated outcome
+    win_probability = min(0.5 + signal_score / 200, 0.75)
+
+    if random.random() < win_probability:
+        profit = position_size
+        capital += profit
+        wins += 1
+        send_telegram(f"📈 PAPER WIN +${profit:.2f} | Capital: ${capital:.2f}")
+    else:
+        loss = position_size
+        capital -= loss
+        daily_loss += loss
+        losses += 1
+        send_telegram(f"📉 PAPER LOSS -${loss:.2f} | Capital: ${capital:.2f}")
+
+# ==============================
+# MAIN LOOP
+# ==============================
 if __name__ == "__main__":
 
     if not w3.is_connected():
         print("Polygon connection failed")
         exit()
 
-    send_telegram("🚀 Professional Cluster Engine Started")
-
-    SMART_WALLETS = fetch_smart_wallets()
+    send_telegram("🚀 Paper Trading Engine Started")
 
     last_block = w3.eth.block_number
 
@@ -147,12 +167,11 @@ if __name__ == "__main__":
                 })
 
                 for log in logs:
-
                     topics = [t.hex() for t in log["topics"]]
-                    tx_hash = log["transactionHash"].hex()
-
-                    maker = "0x" + topics[2][-40:]
                     taker = "0x" + topics[3][-40:]
+
+                    if taker.lower() not in SMART_WALLETS:
+                        continue
 
                     data_hex = log["data"].hex()
                     chunks = [data_hex[i:i+64] for i in range(0, len(data_hex), 64)]
@@ -166,29 +185,19 @@ if __name__ == "__main__":
                     if usdc_amount < MIN_USDC_SIZE:
                         continue
 
-                    if taker.lower() not in SMART_WALLETS:
-                        continue
-
-                    market_id = topics[1]
-                    direction = "UNKNOWN"
-
-                    trade_data = {
-                        "wallet": taker.lower(),
-                        "market": market_id,
-                        "direction": direction,
-                        "size": usdc_amount,
+                    recent_trades.append({
+                        "wallet": taker,
+                        "market": topics[1],
                         "time": datetime.utcnow()
-                    }
+                    })
 
-                    recent_trades.append(trade_data)
+                    recent_trades[:] = clean_old_trades()
 
-                    clean_old_trades()
-                    check_clusters()
+                    grouped = defaultdict(list)
+                    for trade in recent_trades:
+                        grouped[trade["market"]].append(trade)
 
-                last_block = current_block
+                    for market, trades in grouped.items():
+                        unique_wallets = set(t["wallet"] for t in trades)
 
-            time.sleep(3)
-
-        except Exception as e:
-            print("Error:", e)
-            time.sleep(5)
+                        if
