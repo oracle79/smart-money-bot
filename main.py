@@ -67,30 +67,44 @@ def send_telegram(message):
         print("Telegram error:", e)
 
 # =========================
-# MARKET DATA
+# SAFE MARKET FETCH
 # =========================
 
 def fetch_market_data(condition_id):
     try:
         url = f"https://gamma-api.polymarket.com/markets?conditionId={condition_id}"
         r = requests.get(url, timeout=5)
+
+        if r.status_code != 200:
+            return None
+
         data = r.json()
 
-        if isinstance(data, list) and len(data) > 0:
-            market = data[0]
+        # Must be list
+        if not isinstance(data, list):
+            return None
 
-            outcomes = market.get("outcomes", [])
+        if len(data) == 0:
+            return None
 
-            if len(outcomes) >= 2:
-                return {
-                    "question": market.get("question"),
-                    "yes_price": float(outcomes[0]["price"]),
-                    "no_price": float(outcomes[1]["price"])
-                }
-    except Exception as e:
-        print("Market fetch error:", e)
+        market = data[0]
 
-    return None
+        outcomes = market.get("outcomes")
+
+        if not isinstance(outcomes, list) or len(outcomes) < 2:
+            return None
+
+        yes_price = float(outcomes[0].get("price", 0))
+        no_price = float(outcomes[1].get("price", 0))
+
+        return {
+            "question": market.get("question", "Unknown Market"),
+            "yes_price": yes_price,
+            "no_price": no_price
+        }
+
+    except Exception:
+        return None
 
 # =========================
 # FLOW STORAGE
@@ -134,19 +148,14 @@ def monitor():
                     from_addr = event["args"]["from"]
                     to_addr = event["args"]["to"]
 
-                    # Ignore mint and burn
                     if from_addr.lower() == ZERO or to_addr.lower() == ZERO:
                         continue
 
                     token_id = event["args"]["id"]
-                    raw_value = event["args"]["value"]
-                    shares = raw_value / 1_000_000
+                    shares = event["args"]["value"] / 1_000_000
                     now = time.time()
 
-                    # Buyer positive
                     flow_data[to_addr][token_id].append((now, shares))
-
-                    # Seller negative
                     flow_data[from_addr][token_id].append((now, -shares))
 
                     for wallet in [to_addr, from_addr]:
@@ -203,7 +212,7 @@ def monitor():
             time.sleep(10)
 
 # =========================
-# KEEP RAILWAY ALIVE
+# FLASK (Railway Keep Alive)
 # =========================
 
 app = Flask(__name__)
