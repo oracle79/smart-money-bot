@@ -5,9 +5,9 @@ from flask import Flask
 from web3 import Web3
 from web3.middleware import ExtraDataToPOAMiddleware
 
-# =====================================================
+# ============================
 # CONFIG
-# =====================================================
+# ============================
 
 ALCHEMY_URL = "https://polygon-mainnet.g.alchemy.com/v2/5C0VcEocSzKMERi35xguh"
 TELEGRAM_TOKEN = "8520159588:AAGD8tjEWwDpStwKHQTx8fvXLvRL-5WS3MI"
@@ -15,14 +15,9 @@ CHAT_ID = "7154046718"
 
 BLOCK_DELAY = 4
 
-# ERC1155 TransferSingle event signature
 ERC1155_TRANSFER_SINGLE = Web3.keccak(
     text="TransferSingle(address,address,address,uint256,uint256)"
 ).hex()
-
-# =====================================================
-# SMART WALLETS
-# =====================================================
 
 SMART_WALLETS = {
     "0xdb27bf2ac5d428a9c63dbc914611036855a6c56e",
@@ -56,9 +51,9 @@ SMART_WALLETS = {
 
 SMART_WALLETS = {w.lower() for w in SMART_WALLETS}
 
-# =====================================================
+# ============================
 # CONNECT
-# =====================================================
+# ============================
 
 w3 = Web3(Web3.HTTPProvider(ALCHEMY_URL))
 w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
@@ -68,9 +63,9 @@ if not w3.is_connected():
 
 print("Connected to Polygon")
 
-# =====================================================
+# ============================
 # TELEGRAM
-# =====================================================
+# ============================
 
 def send_telegram(message):
     try:
@@ -83,9 +78,9 @@ def send_telegram(message):
     except Exception as e:
         print("Telegram error:", e)
 
-# =====================================================
-# MONITOR ENGINE
-# =====================================================
+# ============================
+# MONITOR
+# ============================
 
 def monitor():
     print("🧠 Receipt-Based Smart Wallet Engine Online")
@@ -96,4 +91,66 @@ def monitor():
     last_block = w3.eth.block_number
     print(f"Starting from block: {last_block}")
 
-    while Tr
+    while True:
+        try:
+            current_block = w3.eth.block_number
+
+            if current_block > last_block:
+
+                for block_number in range(last_block + 1, current_block + 1):
+
+                    block = w3.eth.get_block(block_number, full_transactions=True)
+
+                    for tx in block.transactions:
+
+                        sender = tx.get("from")
+                        if not sender:
+                            continue
+
+                        sender = sender.lower()
+
+                        if sender in SMART_WALLETS:
+
+                            receipt = w3.eth.get_transaction_receipt(tx["hash"])
+
+                            for log in receipt["logs"]:
+
+                                if log["topics"] and log["topics"][0].hex() == ERC1155_TRANSFER_SINGLE:
+
+                                    tx_hash = tx["hash"].hex()
+                                    contract_address = log["address"]
+
+                                    message = (
+                                        "🎯 POLYMARKET ERC1155 TRADE DETECTED\n\n"
+                                        f"Wallet: {sender}\n"
+                                        f"Contract: {contract_address}\n"
+                                        f"Block: {block_number}\n"
+                                        f"https://polygonscan.com/tx/{tx_hash}"
+                                    )
+
+                                    print(message)
+                                    send_telegram(message)
+
+                last_block = current_block
+
+            print(f"Alive | Block {current_block}")
+            time.sleep(BLOCK_DELAY)
+
+        except Exception as e:
+            print("Loop error:", e)
+            time.sleep(10)
+
+# ============================
+# FLASK KEEP ALIVE
+# ============================
+
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "Receipt Smart Wallet Engine Running"
+
+threading.Thread(target=monitor, daemon=True).start()
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=8080)
