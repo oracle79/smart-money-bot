@@ -13,7 +13,16 @@ ALCHEMY_URL = "https://polygon-mainnet.g.alchemy.com/v2/5C0VcEocSzKMERi35xguh"
 TELEGRAM_TOKEN = "8520159588:AAGD8tjEWwDpStwKHQTx8fvXLvRL-5WS3MI"
 CHAT_ID = "7154046718"
 
-POLYMARKET_EXCHANGE = "0x4d97dcd97ec945f40cf65f87097ace5ea0476045".lower()
+BLOCK_DELAY = 4
+
+# ERC1155 TransferSingle event signature
+ERC1155_TRANSFER_SINGLE = Web3.keccak(
+    text="TransferSingle(address,address,address,uint256,uint256)"
+).hex()
+
+# =====================================================
+# SMART WALLETS
+# =====================================================
 
 SMART_WALLETS = {
     "0xdb27bf2ac5d428a9c63dbc914611036855a6c56e",
@@ -47,17 +56,15 @@ SMART_WALLETS = {
 
 SMART_WALLETS = {w.lower() for w in SMART_WALLETS}
 
-BLOCK_DELAY = 4
-
 # =====================================================
-# CONNECT TO POLYGON
+# CONNECT
 # =====================================================
 
 w3 = Web3(Web3.HTTPProvider(ALCHEMY_URL))
 w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
 
 if not w3.is_connected():
-    raise Exception("Failed to connect to Polygon")
+    raise Exception("Polygon connection failed")
 
 print("Connected to Polygon")
 
@@ -77,99 +84,16 @@ def send_telegram(message):
         print("Telegram error:", e)
 
 # =====================================================
-# YES / NO DECODER (basic heuristic)
-# =====================================================
-
-def decode_yes_no(input_data):
-    if not input_data or len(input_data) < 10:
-        return "UNKNOWN"
-
-    # ERC1155 token IDs often end in 01 (YES) or 00 (NO)
-    if input_data.endswith("01"):
-        return "YES"
-    elif input_data.endswith("00"):
-        return "NO"
-    else:
-        return "UNKNOWN"
-
-# =====================================================
 # MONITOR ENGINE
 # =====================================================
 
 def monitor():
-    print("🧠 Smart Wallet Engine Online")
+    print("🧠 Receipt-Based Smart Wallet Engine Online")
     print(f"Tracking {len(SMART_WALLETS)} wallets")
 
-    send_telegram(f"🚀 Monitoring {len(SMART_WALLETS)} smart wallets on Polymarket")
+    send_telegram(f"🚀 Receipt Monitoring Started ({len(SMART_WALLETS)} wallets)")
 
     last_block = w3.eth.block_number
     print(f"Starting from block: {last_block}")
 
-    while True:
-        try:
-            current_block = w3.eth.block_number
-
-            if current_block > last_block:
-
-                for block_number in range(last_block + 1, current_block + 1):
-
-                    block = w3.eth.get_block(block_number, full_transactions=True)
-
-                    for tx in block.transactions:
-
-                        sender = tx.get("from")
-                        receiver = tx.get("to")
-
-                        if not sender or not receiver:
-                            continue
-
-                        sender = sender.lower()
-                        receiver = receiver.lower()
-
-                        # Only smart wallets
-                        if sender in SMART_WALLETS:
-
-                            # Only Polymarket exchange
-                            if receiver == POLYMARKET_EXCHANGE:
-
-                                tx_hash = tx["hash"].hex()
-                                input_data = tx["input"]
-                                direction = decode_yes_no(input_data)
-
-                                value_matic = w3.from_wei(tx["value"], "ether")
-
-                                message = (
-                                    "🎯 POLYMARKET TRADE DETECTED\n\n"
-                                    f"Wallet: {sender}\n"
-                                    f"Direction: {direction}\n"
-                                    f"Estimated MATIC Sent: {value_matic}\n"
-                                    f"Block: {block_number}\n"
-                                    f"https://polygonscan.com/tx/{tx_hash}"
-                                )
-
-                                print(message)
-                                send_telegram(message)
-
-                last_block = current_block
-
-            print(f"Alive | Block {current_block}")
-            time.sleep(BLOCK_DELAY)
-
-        except Exception as e:
-            print("Loop error:", e)
-            time.sleep(10)
-
-# =====================================================
-# FLASK SERVER (Railway Keep Alive)
-# =====================================================
-
-app = Flask(__name__)
-
-@app.route("/")
-def home():
-    return "Smart Wallet Polymarket Engine Running"
-
-threading.Thread(target=monitor, daemon=True).start()
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080)
+    while Tr
