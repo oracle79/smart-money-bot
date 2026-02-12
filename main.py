@@ -16,7 +16,7 @@ TELEGRAM_TOKEN = "8520159588:AAGD8tjEWwDpStwKHQTx8fvXLvRL-5WS3MI"
 CHAT_ID = "7154046718"
 
 WINDOW_SECONDS = 300
-SHARE_THRESHOLD = 1000
+SHARE_THRESHOLD = 500   # LOWERED for testing
 POLL_INTERVAL = 4
 
 ZERO = "0x0000000000000000000000000000000000000000"
@@ -47,13 +47,10 @@ CTF_ABI = [
 w3 = Web3(Web3.HTTPProvider(ALCHEMY_URL))
 w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
 
-if not w3.is_connected():
-    raise Exception("Failed to connect to Polygon")
-
 ctf_contract = w3.eth.contract(address=CTF_ADDRESS, abi=CTF_ABI)
 
 print("Connected to Polygon")
-print("🧠 Polymarket Intelligence Engine Online")
+print("🔥 Accumulation Flow Engine Online")
 
 # =========================
 # TELEGRAM
@@ -67,46 +64,6 @@ def send_telegram(message):
         print("Telegram error:", e)
 
 # =========================
-# SAFE MARKET FETCH
-# =========================
-
-def fetch_market_data(condition_id):
-    try:
-        url = f"https://gamma-api.polymarket.com/markets?conditionId={condition_id}"
-        r = requests.get(url, timeout=5)
-
-        if r.status_code != 200:
-            return None
-
-        data = r.json()
-
-        # Must be list
-        if not isinstance(data, list):
-            return None
-
-        if len(data) == 0:
-            return None
-
-        market = data[0]
-
-        outcomes = market.get("outcomes")
-
-        if not isinstance(outcomes, list) or len(outcomes) < 2:
-            return None
-
-        yes_price = float(outcomes[0].get("price", 0))
-        no_price = float(outcomes[1].get("price", 0))
-
-        return {
-            "question": market.get("question", "Unknown Market"),
-            "yes_price": yes_price,
-            "no_price": no_price
-        }
-
-    except Exception:
-        return None
-
-# =========================
 # FLOW STORAGE
 # =========================
 
@@ -114,21 +71,12 @@ flow_data = defaultdict(lambda: defaultdict(deque))
 alerted = set()
 
 # =========================
-# TOKEN DECODER
-# =========================
-
-def decode_token(token_id):
-    outcome_index = token_id & 1
-    condition_id = hex(token_id >> 1)
-    return condition_id, outcome_index
-
-# =========================
 # MONITOR
 # =========================
 
 def monitor():
 
-    send_telegram("🚀 Polymarket Intelligence Engine Started")
+    send_telegram("🚀 Accumulation Engine Started")
 
     last_block = w3.eth.block_number
 
@@ -170,35 +118,19 @@ def monitor():
 
                         if abs(net) >= SHARE_THRESHOLD and key not in alerted:
 
-                            condition_id, outcome_index = decode_token(token_id)
-                            market = fetch_market_data(condition_id)
+                            direction = "BUYING" if net > 0 else "SELLING"
 
-                            if market:
+                            message = (
+                                "🔥 ACCUMULATION DETECTED\n\n"
+                                f"Wallet: {wallet}\n"
+                                f"Direction: {direction}\n"
+                                f"Net Shares (5m): {net:,.0f}\n"
+                                f"TokenID: {token_id}\n"
+                                f"Block: {event['blockNumber']}"
+                            )
 
-                                price = (
-                                    market["yes_price"]
-                                    if outcome_index == 0
-                                    else market["no_price"]
-                                )
-
-                                usd_value = abs(net) * price
-                                direction = "BUYING" if net > 0 else "SELLING"
-                                side = "YES" if outcome_index == 0 else "NO"
-
-                                message = (
-                                    "🔥 SMART FLOW DETECTED\n\n"
-                                    f"Wallet: {wallet}\n"
-                                    f"Direction: {direction}\n"
-                                    f"Side: {side}\n"
-                                    f"Net Shares (5m): {net:,.0f}\n"
-                                    f"USD Value: ${usd_value:,.0f}\n\n"
-                                    f"Market: {market['question']}\n"
-                                    f"YES Price: {market['yes_price']}\n"
-                                    f"NO Price: {market['no_price']}\n"
-                                )
-
-                                print(message)
-                                send_telegram(message)
+                            print(message)
+                            send_telegram(message)
 
                             alerted.add(key)
 
@@ -212,14 +144,14 @@ def monitor():
             time.sleep(10)
 
 # =========================
-# FLASK (Railway Keep Alive)
+# FLASK
 # =========================
 
 app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Polymarket Intelligence Engine Running"
+    return "Accumulation Engine Running"
 
 threading.Thread(target=monitor, daemon=True).start()
 
