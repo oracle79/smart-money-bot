@@ -6,12 +6,14 @@ from web3 import Web3
 from web3.middleware import ExtraDataToPOAMiddleware
 
 # ==========================================
-# CONFIG (HARDCODED FOR SIMPLICITY)
+# CONFIG
 # ==========================================
 
 ALCHEMY_URL = "https://polygon-mainnet.g.alchemy.com/v2/5C0VcEocSzKMERi35xguh"
 TELEGRAM_TOKEN = "8520159588:AAGD8tjEWwDpStwKHQTx8fvXLvRL-5WS3MI"
 CHAT_ID = "7154046718"
+
+POLYMARKET_EXCHANGE = "0x4d97dcd97ec945f40cf65f87097ace5ea0476045".lower()
 
 SMART_WALLETS = {
     "0x6d3c5bd13984b2de47c3a88ddc455309aab3d294".lower(),
@@ -19,10 +21,10 @@ SMART_WALLETS = {
     "0x204f72f35326db932158cba6adff0b9a1da95e14".lower()
 }
 
-POLL_DELAY = 8  # seconds between checks
+POLL_DELAY = 8
 
 # ==========================================
-# CONNECT TO POLYGON
+# CONNECT
 # ==========================================
 
 w3 = Web3(Web3.HTTPProvider(ALCHEMY_URL))
@@ -34,7 +36,7 @@ if not w3.is_connected():
 print("Connected to Polygon")
 
 # ==========================================
-# TELEGRAM FUNCTION
+# TELEGRAM
 # ==========================================
 
 def send_telegram(message):
@@ -52,15 +54,31 @@ def send_telegram(message):
         print("Telegram error:", e)
 
 # ==========================================
-# MONITOR ENGINE
+# HELPER: Decode YES / NO
+# ==========================================
+
+def decode_yes_no(input_data):
+    # Very simplified logic:
+    # YES token usually ends in 01
+    # NO token usually ends in 00
+    # This is heuristic but works for binary ERC1155 ids
+
+    if input_data.endswith("01"):
+        return "YES"
+    elif input_data.endswith("00"):
+        return "NO"
+    else:
+        return "UNKNOWN"
+
+# ==========================================
+# MONITOR
 # ==========================================
 
 def monitor():
     print("🧠 Smart Wallet Engine Online")
     print(f"Tracking {len(SMART_WALLETS)} wallets")
 
-    # SEND STARTUP MESSAGE (CONFIRMS TELEGRAM WORKS)
-    send_telegram("✅ Smart Wallet Engine Started and Monitoring")
+    send_telegram("✅ Smart Wallet Engine Monitoring Polymarket Trades")
 
     last_block = w3.eth.block_number
     print(f"Starting from block: {last_block}")
@@ -74,20 +92,35 @@ def monitor():
 
                 for tx in block.transactions:
                     sender = tx.get("from")
+                    receiver = tx.get("to")
 
-                    if sender and sender.lower() in SMART_WALLETS:
-                        value_matic = w3.from_wei(tx["value"], "ether")
+                    if not sender or not receiver:
+                        continue
 
-                        message = (
-                            "🔥 Smart Wallet Transaction Detected\n\n"
-                            f"Wallet: {sender}\n"
-                            f"Block: {current_block}\n"
-                            f"Value: {value_matic} MATIC\n"
-                            f"https://polygonscan.com/tx/{tx['hash'].hex()}"
-                        )
+                    sender = sender.lower()
+                    receiver = receiver.lower()
 
-                        print(message)
-                        send_telegram(message)
+                    # Filter smart wallets
+                    if sender in SMART_WALLETS:
+
+                        # Filter Polymarket contract only
+                        if receiver == POLYMARKET_EXCHANGE:
+
+                            tx_hash = tx["hash"].hex()
+                            input_data = tx["input"]
+
+                            direction = decode_yes_no(input_data)
+
+                            message = (
+                                "🎯 POLYMARKET TRADE DETECTED\n\n"
+                                f"Wallet: {sender}\n"
+                                f"Direction: {direction}\n"
+                                f"Block: {current_block}\n"
+                                f"https://polygonscan.com/tx/{tx_hash}"
+                            )
+
+                            print(message)
+                            send_telegram(message)
 
                 last_block = current_block
 
@@ -99,16 +132,15 @@ def monitor():
             time.sleep(15)
 
 # ==========================================
-# FLASK SERVER (KEEPS RAILWAY ALIVE)
+# FLASK SERVER
 # ==========================================
 
 app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Smart Wallet Engine Running"
+    return "Smart Wallet Polymarket Engine Running"
 
-# START MONITOR IN BACKGROUND
 threading.Thread(target=monitor, daemon=True).start()
 
 if __name__ == "__main__":
