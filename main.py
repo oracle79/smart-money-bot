@@ -10,15 +10,31 @@ from web3.middleware import ExtraDataToPOAMiddleware
 # =========================
 
 ALCHEMY_URL = "https://polygon-mainnet.g.alchemy.com/v2/5C0VcEocSzKMERi35xguh"
-TELEGRAM_TOKEN = "8520159588:AAGD8tjEWwDpStwKHQTx8fvXLvRL-5WS3MI"
-CHAT_ID = "7154046718"
+TELEGRAM_TOKEN = "YOUR_TELEGRAM_TOKEN"
+CHAT_ID = "YOUR_CHAT_ID"
 
-ALERT_THRESHOLD_USD = 1000
+ALERT_THRESHOLD_USD = 1000   # ✅ LOWERED TO $1K
 POLL_INTERVAL = 5
 
 EXCHANGE_ADDRESS = Web3.to_checksum_address(
     "0x4bfb41d5b3570defd03c39a9a4d8de6bd8b8982e"
 )
+
+# Minimal ABI for Fill event
+EXCHANGE_ABI = [
+    {
+        "anonymous": False,
+        "inputs": [
+            {"indexed": True, "name": "maker", "type": "address"},
+            {"indexed": True, "name": "taker", "type": "address"},
+            {"indexed": False, "name": "makerAmount", "type": "uint256"},
+            {"indexed": False, "name": "takerAmount", "type": "uint256"},
+            {"indexed": False, "name": "fee", "type": "uint256"}
+        ],
+        "name": "Fill",
+        "type": "event"
+    }
+]
 
 # =========================
 # CONNECT
@@ -29,6 +45,11 @@ w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
 
 if not w3.is_connected():
     raise Exception("Failed to connect to Polygon")
+
+exchange_contract = w3.eth.contract(
+    address=EXCHANGE_ADDRESS,
+    abi=EXCHANGE_ABI
+)
 
 print("Connected to Polygon")
 
@@ -44,21 +65,12 @@ def send_telegram(message):
         print("Telegram error:", e)
 
 # =========================
-# EVENT SIGNATURE
-# =========================
-
-# Fill event signature
-FILL_TOPIC = Web3.keccak(
-    text="Fill(address,address,address,uint256,uint256,uint256,uint256)"
-).hex()
-
-# =========================
 # MONITOR
 # =========================
 
 def monitor():
-    print("🎯 Polymarket Whale Trade Monitor Online")
-    send_telegram("🚀 $10k+ Polymarket Trade Monitor Started")
+    print("🎯 Polymarket $1K+ Trade Monitor Online")
+    send_telegram("🚀 $1K+ Polymarket Trade Monitor Started")
 
     last_block = w3.eth.block_number
 
@@ -68,45 +80,40 @@ def monitor():
 
             if latest_block > last_block:
 
-                logs = w3.eth.get_logs({
-                    "fromBlock": last_block + 1,
-                    "toBlock": latest_block,
-                    "address": EXCHANGE_ADDRESS,
-                    "topics": [FILL_TOPIC]
-                })
+                events = exchange_contract.events.Fill().get_logs(
+                    from_block=last_block + 1,
+                    to_block=latest_block
+                )
 
-                for log in logs:
+                for event in events:
 
-                    tx_hash = log["transactionHash"].hex()
+                    maker = event["args"]["maker"]
+                    taker = event["args"]["taker"]
+                    taker_amount = event["args"]["takerAmount"]
 
-                    # Decode raw values from data
-                    data = log["data"]
+                    # USDC = 6 decimals
+                    usdc_amount = taker_amount / 1_000_000
 
-                    # Each uint256 is 32 bytes
-                    values = [
-                        int(data[i:i+64], 16)
-                        for i in range(2, len(data), 64)
-                    ]
+                    # 👀 DEBUG LOG (always prints)
+                    print(f"Fill detected: ${usdc_amount:,.2f}")
 
-                    # Polymarket Fill event structure:
-                    # values[0] = makerAmount
-                    # values[1] = takerAmount
-                    # (USDC is 6 decimals)
+                    if usdc_amount >= ALERT_THRESHOLD_USD:
 
-                    if len(values) >= 2:
-                        usdc_amount = values[1] / 1_000_000
+                        tx_hash = event["transactionHash"].hex()
 
-                        if usdc_amount >= ALERT_THRESHOLD_USD:
+                        message = (
+                            "🐋 POLYMARKET TRADE ALERT\n\n"
+                            f"Size: ${usdc_amount:,.0f}\n"
+                            f"Maker: {maker}\n"
+                            f"Taker: {taker}\n"
+                            f"Block: {event['blockNumber']}\n\n"
+                            f"https://polygonscan.com/tx/{tx_hash}"
+                        )
 
-                            message = (
-                                "🐋 POLYMARKET WHALE TRADE\n\n"
-                                f"Size: ${usdc_amount:,.0f}\n"
-                                f"Block: {log['blockNumber']}\n"
-                                f"https://polygonscan.com/tx/{tx_hash}"
-                            )
+                        print("ALERT TRIGGERED")
+                        print(message)
 
-                            print(message)
-                            send_telegram(message)
+                        send_telegram(message)
 
                 last_block = latest_block
 
@@ -125,7 +132,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Polymarket Whale Monitor Running"
+    return "Polymarket $1K+ Monitor Running"
 
 threading.Thread(target=monitor, daemon=True).start()
 
