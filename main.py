@@ -2,11 +2,12 @@ import os
 import time
 import requests
 from web3 import Web3
-from datetime import datetime
+from collections import defaultdict
+from datetime import datetime, timezone
 
-# ==============================
-# ENV VARIABLES (DO NOT RENAME)
-# ==============================
+# =============================
+# ENV
+# =============================
 
 RPC = os.getenv("RPC")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -16,134 +17,167 @@ if not RPC:
     raise Exception("RPC not set")
 
 if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-    raise Exception("Telegram credentials not set")
+    raise Exception("Telegram credentials missing")
 
-# ==============================
-# CONNECT TO POLYGON
-# ==============================
+# =============================
+# WEB3
+# =============================
 
 w3 = Web3(Web3.HTTPProvider(RPC))
 
 if not w3.is_connected():
-    raise Exception("Failed to connect to Polygon RPC")
+    raise Exception("Web3 failed to connect")
 
-current_block = w3.eth.block_number
+print("🧠 Smart Wallet Quant Engine v2 Online")
+print("Polygon Block:", w3.eth.block_number)
 
-print("🧠 Smart Wallet Quant Engine v1 Online")
-print("Polygon Block:", current_block)
+EXCHANGE_ADDRESS = Web3.to_checksum_address(
+    "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E"
+)
 
-# ==============================
-# TELEGRAM FUNCTION
-# ==============================
+# =============================
+# TELEGRAM
+# =============================
 
 def send_telegram(message):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": message,
+        "parse_mode": "Markdown"
+    }
     try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        payload = {
-            "chat_id": TELEGRAM_CHAT_ID,
-            "text": message
-        }
-        requests.post(url, data=payload, timeout=10)
-    except Exception as e:
-        print("Telegram error:", e)
+        requests.post(url, json=payload, timeout=10)
+    except:
+        pass
 
-send_telegram(f"🧠 Smart Wallet Quant Engine Online\nPolygon Block: {current_block}")
+# =============================
+# BUILD WEEKLY TOP WALLET LIST
+# =============================
 
-# ==============================
-# LEADERBOARD FETCH
-# ==============================
+def build_top_wallets():
 
-def fetch_top_wallets(limit=500):
-    print("Fetching weekly leaderboard...")
+    print("🔍 Building weekly leaderboard from chain...")
+
+    current_block = w3.eth.block_number
+    blocks_per_day = 43000  # approx Polygon
+    seven_days_blocks = blocks_per_day * 7
+
+    start_block = current_block - seven_days_blocks
+
+    wallet_volume = defaultdict(int)
 
     try:
-        url = "https://gamma-api.polymarket.com/leaderboard"
+        logs = w3.eth.get_logs({
+            "fromBlock": start_block,
+            "toBlock": current_block,
+            "address": EXCHANGE_ADDRESS
+        })
 
-        params = {
-            "period": "7d",
-            "limit": limit
-        }
+        print(f"Logs fetched: {len(logs)}")
 
-        response = requests.get(url, params=params, timeout=20)
+        for log in logs:
+            tx = w3.eth.get_transaction(log["transactionHash"])
+            wallet = tx["from"]
 
-        if response.status_code != 200:
-            print("Leaderboard request failed:", response.status_code)
-            send_telegram("⚠️ Leaderboard request failed")
-            return []
-
-        data = response.json()
-
-        wallets = []
-
-        for user in data:
-            address = user.get("address")
-            pnl = user.get("pnl")
-
-            if address and address.startswith("0x"):
-                wallets.append({
-                    "address": Web3.to_checksum_address(address),
-                    "pnl": pnl
-                })
-
-        print("Loaded wallets:", len(wallets))
-        send_telegram(f"📊 Tracking {len(wallets)} top weekly wallets")
-
-        return wallets
+            # simple proxy metric: count trades
+            wallet_volume[wallet] += 1
 
     except Exception as e:
-        print("Leaderboard fetch error:", e)
-        send_telegram(f"⚠️ Leaderboard error")
-        return []
+        print("Leaderboard build failed:", e)
+        return set()
 
-# ==============================
-# SIMPLE WALLET MONITOR LOOP
-# ==============================
+    # sort wallets by trade count
+    sorted_wallets = sorted(
+        wallet_volume.items(),
+        key=lambda x: x[1],
+        reverse=True
+    )
 
-def monitor_wallets(wallets):
+    top_wallets = [w for w, v in sorted_wallets[:400]]
 
-    last_block = w3.eth.block_number
+    print(f"Top wallets selected: {len(top_wallets)}")
 
-    print("Starting wallet monitor loop...")
-    send_telegram("🚀 Wallet monitoring started")
+    return set(top_wallets)
 
-    while True:
-        try:
-            current_block = w3.eth.block_number
+# =============================
+# BUILD INITIAL LIST
+# =============================
 
-            if current_block > last_block:
-                print("New block:", current_block)
+TRACKED_WALLETS = build_top_wallets()
 
-                # For now we just heartbeat.
-                # Real cluster detection comes next phase.
-                send_telegram(f"📦 New Polygon Block: {current_block}")
+print("Tracking Wallets:", len(TRACKED_WALLETS))
 
-                last_block = current_block
+send_telegram(f"✅ Wallet monitoring started\nTracked wallets: {len(TRACKED_WALLETS)}")
 
-            time.sleep(15)
+# =============================
+# CLUSTER ENGINE
+# =============================
 
-        except Exception as e:
-            print("Monitor error:", e)
-            time.sleep(10)
+CLUSTER_WINDOW_SECONDS = 600
+CLUSTER_THRESHOLD = 5
 
-# ==============================
-# WEEKLY REFRESH SYSTEM
-# ==============================
+cluster_tracker = defaultdict(list)
 
-def run_engine():
+def clean_old():
+    now = time.time()
+    for key in list(cluster_tracker.keys()):
+        cluster_tracker[key] = [
+            t for t in cluster_tracker[key]
+            if now - t < CLUSTER_WINDOW_SECONDS
+        ]
+        if not cluster_tracker[key]:
+            del cluster_tracker[key]
 
-    wallets = fetch_top_wallets(limit=500)
+# =============================
+# LIVE MONITOR
+# =============================
 
-    print("Tracking Wallets:", len(wallets))
+last_block = w3.eth.block_number
 
-    if len(wallets) == 0:
-        send_telegram("⚠️ No wallets loaded")
-    else:
-        send_telegram("✅ Smart wallet list loaded")
+while True:
+    try:
+        current_block = w3.eth.block_number
 
-    monitor_wallets(wallets)
+        if current_block > last_block:
 
-# ==============================
-# START ENGINE
-# ==============================
+            logs = w3.eth.get_logs({
+                "fromBlock": last_block + 1,
+                "toBlock": current_block,
+                "address": EXCHANGE_ADDRESS
+            })
 
-run_engine()
+            for log in logs:
+
+                tx = w3.eth.get_transaction(log["transactionHash"])
+                wallet = tx["from"]
+
+                if wallet not in TRACKED_WALLETS:
+                    continue
+
+                market_id = log["address"]
+                key = (market_id, "FLOW")
+
+                cluster_tracker[key].append(time.time())
+                clean_old()
+
+                if len(cluster_tracker[key]) >= CLUSTER_THRESHOLD:
+
+                    message = (
+                        "🚨 CLUSTER ALERT\n\n"
+                        f"Market: {market_id}\n"
+                        f"Wallet Count: {len(cluster_tracker[key])}\n"
+                        f"Window: {CLUSTER_WINDOW_SECONDS//60}m\n"
+                        f"Block: {current_block}"
+                    )
+
+                    send_telegram(message)
+                    cluster_tracker[key] = []
+
+            last_block = current_block
+
+        time.sleep(3)
+
+    except Exception as e:
+        print("Live loop error:", e)
+        time.sleep(5)
