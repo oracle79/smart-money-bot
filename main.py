@@ -1,160 +1,116 @@
-import requests
 import time
-from datetime import datetime
+import requests
+from web3 import Web3
+from web3.middleware import ExtraDataToPOAMiddleware
 
-# ==============================
+# =============================
 # CONFIG
-# ==============================
+# =============================
 
-SMART_WALLETS = {
-    "0x6d3c5bd13984b2de47c3a88ddc455309aab3d294".lower(),
-    "0xee613b3fc183ee44f9da9c05f53e2da107e3debf".lower(),
-    "0x204f72f35326db932158cba6adff0b9a1da95e14".lower()
-}
+RPC_URL = "https://polygon-rpc.com"
 
 TELEGRAM_TOKEN = "8520159588:AAGD8tjEWwDpStwKHQTx8fvXLvRL-5WS3MI"
-TELEGRAM_CHAT_ID = "7154046718"
+CHAT_ID = "7154046718"
 
-POLY_API_KEY = "019c4faf-4286-782b-84dd-6548ea1b8e7c"
+SMART_WALLETS = [
+    "0x6d3c5bd13984b2de47c3a88ddc455309aab3d294",
+    "0xee613b3fc183ee44f9da9c05f53e2da107e3debf",
+    "0x204f72f35326db932158cba6adff0b9a1da95e14"
+]
 
-MIN_TRADE_USD = 1
+POLYMARKET_EXCHANGE = Web3.to_checksum_address("0x4bfb41d5b3570defd03c39a9a4d8de6bd8b8982e")
 
+MIN_USD_THRESHOLD = 1  # for testing
 
-# ==============================
+# =============================
+# WEB3 SETUP
+# =============================
+
+w3 = Web3(Web3.HTTPProvider(RPC_URL))
+w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
+
+print("🧠 Smart Wallet Engine Online")
+print("Tracking", len(SMART_WALLETS), "wallets")
+
+# =============================
 # TELEGRAM
-# ==============================
+# =============================
 
-def send_telegram(message):
+def send_telegram(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": message
-    }
+    data = {"chat_id": CHAT_ID, "text": msg}
+    requests.post(url, data=data)
+
+# =============================
+# FETCH EVENT DATA
+# =============================
+
+def fetch_market_data(token_id):
     try:
-        requests.post(url, json=payload, timeout=10)
-    except Exception as e:
-        print("Telegram error:", e)
+        url = "https://gamma-api.polymarket.com/markets"
+        response = requests.get(url, timeout=10)
+        markets = response.json()
 
+        for market in markets:
+            if str(token_id).lower() in str(market).lower():
+                event_name = market.get("question", "Unknown Event")
+                yes_price = market.get("outcomePrices", [0,0])[0]
+                no_price = market.get("outcomePrices", [0,0])[1]
+                return event_name, yes_price, no_price
 
-# ==============================
-# FETCH TRADES
-# ==============================
+    except:
+        pass
 
-def fetch_recent_trades():
-    url = "https://clob.polymarket.com/trades?limit=50"
+    return "Unknown Event", "?", "?"
 
-    headers = {
-        "Authorization": f"Bearer {POLY_API_KEY}"
-    }
+# =============================
+# MONITOR LOOP
+# =============================
 
-    try:
-        r = requests.get(url, headers=headers, timeout=10)
-        data = r.json()
-
-        if isinstance(data, dict) and "data" in data:
-            return data["data"]
-
-        if isinstance(data, list):
-            return data
-
-        print("Unexpected trade response:", data)
-        return []
-
-    except Exception as e:
-        print("Trade fetch error:", e)
-        return []
-
-
-# ==============================
-# FETCH MARKET INFO
-# ==============================
-
-def fetch_market_info(market_id):
-    url = f"https://clob.polymarket.com/markets/{market_id}"
-
-    headers = {
-        "Authorization": f"Bearer {POLY_API_KEY}"
-    }
-
-    try:
-        r = requests.get(url, headers=headers, timeout=10)
-        data = r.json()
-
-        if not isinstance(data, dict):
-            return "Unknown Event", "N/A", "N/A"
-
-        event_name = data.get("question", "Unknown Event")
-        yes_price = data.get("bestBid", "N/A")
-        no_price = data.get("bestAsk", "N/A")
-
-        return event_name, yes_price, no_price
-
-    except Exception as e:
-        print("Market fetch error:", e)
-        return "Unknown Event", "N/A", "N/A"
-
-
-# ==============================
-# ENGINE
-# ==============================
-
-print("🧠 Smart Wallet API Engine Online")
-print(f"Tracking {len(SMART_WALLETS)} wallets")
-print("Monitoring Polymarket trades...")
-
-seen_trade_ids = set()
+last_block = w3.eth.block_number
 
 while True:
     try:
-        trades = fetch_recent_trades()
+        current_block = w3.eth.block_number
 
-        for trade in trades:
+        for block_num in range(last_block + 1, current_block + 1):
+            block = w3.eth.get_block(block_num, full_transactions=True)
 
-            if not isinstance(trade, dict):
-                continue
+            for tx in block.transactions:
+                if tx["from"] and tx["from"].lower() in [w.lower() for w in SMART_WALLETS]:
 
-            trade_id = trade.get("id")
-            if not trade_id:
-                continue
+                    if tx["to"] and tx["to"].lower() == POLYMARKET_EXCHANGE.lower():
 
-            if trade_id in seen_trade_ids:
-                continue
+                        value_usd = w3.from_wei(tx["value"], "ether")
 
-            seen_trade_ids.add(trade_id)
+                        if value_usd >= MIN_USD_THRESHOLD:
 
-            wallet = trade.get("maker", "").lower()
-            if wallet not in SMART_WALLETS:
-                continue
+                            token_id = tx["input"][:10]  # placeholder decode
 
-            size = float(trade.get("size", 0))
-            price = float(trade.get("price", 0))
-            side = trade.get("side", "").upper()
-            market_id = trade.get("market")
+                            event_name, yes_price, no_price = fetch_market_data(token_id)
 
-            usd_value = size * price
+                            direction = "YES/NO (decoded soon)"
 
-            if usd_value < MIN_TRADE_USD:
-                continue
+                            message = f"""
+🚨 Smart Wallet Trade Detected
 
-            event_name, yes_price, no_price = fetch_market_info(market_id)
+Wallet: {tx['from']}
+Event: {event_name}
 
-            message = (
-                f"🔥 SMART WALLET TRADE DETECTED\n\n"
-                f"Wallet: {wallet}\n"
-                f"Event: {event_name}\n\n"
-                f"Side: {side}\n"
-                f"Trade Size: ${usd_value:.2f}\n\n"
-                f"Current YES Price: {yes_price}\n"
-                f"Current NO Price: {no_price}\n\n"
-                f"Time: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC"
-            )
+Direction: {direction}
+Amount: ${round(float(value_usd),2)}
 
-            print(message)
-            send_telegram(message)
+Current Prices:
+YES: {yes_price}
+NO: {no_price}
+"""
+                            print(message)
+                            send_telegram(message)
 
-        print("Alive | API Monitoring")
-        time.sleep(15)
+        last_block = current_block
+        print("Alive | Block", current_block)
+        time.sleep(5)
 
     except Exception as e:
         print("Loop error:", e)
-        time.sleep(10)
+        time.sleep(5)
