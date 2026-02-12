@@ -5,23 +5,11 @@ from flask import Flask
 from web3 import Web3
 from web3.middleware import ExtraDataToPOAMiddleware
 
-# ============================
-# CONFIG
-# ============================
-
 ALCHEMY_URL = "https://polygon-mainnet.g.alchemy.com/v2/5C0VcEocSzKMERi35xguh"
 TELEGRAM_TOKEN = "8520159588:AAGD8tjEWwDpStwKHQTx8fvXLvRL-5WS3MI"
 CHAT_ID = "7154046718"
 
 BLOCK_DELAY = 4
-
-# Known Polymarket Contracts
-POLYMARKET_CONTRACTS = {
-    "0x4d97dcd97ec945f40cf65f87097ace5ea0476045",  # Exchange
-    "0x8b9805a2f595b6705e74f7310829f2d299d21522",  # Conditional Tokens
-}
-
-POLYMARKET_CONTRACTS = {c.lower() for c in POLYMARKET_CONTRACTS}
 
 SMART_WALLETS = {
     "0xdb27bf2ac5d428a9c63dbc914611036855a6c56e",
@@ -55,50 +43,21 @@ SMART_WALLETS = {
 
 SMART_WALLETS = {w.lower() for w in SMART_WALLETS}
 
-# Convert wallet addresses to topic format (32-byte padded)
-WALLET_TOPICS = {
-    "0x" + "0" * 24 + w[2:].lower() for w in SMART_WALLETS
-}
-
-# ============================
-# CONNECT
-# ============================
-
 w3 = Web3(Web3.HTTPProvider(ALCHEMY_URL))
 w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
 
-if not w3.is_connected():
-    raise Exception("Polygon connection failed")
-
-print("Connected to Polygon")
-
-# ============================
-# TELEGRAM
-# ============================
-
-def send_telegram(message):
+def send_telegram(msg):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        requests.post(
-            url,
-            json={"chat_id": CHAT_ID, "text": message},
-            timeout=10
-        )
-    except Exception as e:
-        print("Telegram error:", e)
-
-# ============================
-# MONITOR
-# ============================
+        requests.post(url, json={"chat_id": CHAT_ID, "text": msg})
+    except:
+        pass
 
 def monitor():
-    print("🧠 Log-Based Smart Wallet Engine Online")
-    print(f"Tracking {len(SMART_WALLETS)} wallets")
-
-    send_telegram(f"🚀 Monitoring {len(SMART_WALLETS)} wallets (log-based detection)")
+    print("Verification Engine Online")
+    send_telegram("🧪 Verification Engine Started")
 
     last_block = w3.eth.block_number
-    print(f"Starting from block: {last_block}")
 
     while True:
         try:
@@ -108,31 +67,21 @@ def monitor():
 
                 for block_number in range(last_block + 1, current_block + 1):
 
-                    block = w3.eth.get_block(block_number, full_transactions=False)
+                    block = w3.eth.get_block(block_number, full_transactions=True)
 
-                    for tx_hash in block.transactions:
+                    for tx in block.transactions:
 
-                        receipt = w3.eth.get_transaction_receipt(tx_hash)
+                        if tx["from"] and tx["from"].lower() in SMART_WALLETS:
 
-                        for log in receipt["logs"]:
+                            message = (
+                                "🚨 SMART WALLET TX DETECTED\n\n"
+                                f"Wallet: {tx['from']}\n"
+                                f"Block: {block_number}\n"
+                                f"https://polygonscan.com/tx/{tx['hash'].hex()}"
+                            )
 
-                            contract_address = log["address"].lower()
-
-                            if contract_address not in POLYMARKET_CONTRACTS:
-                                continue
-
-                            for topic in log["topics"]:
-                                if topic.hex().lower() in WALLET_TOPICS:
-
-                                    message = (
-                                        "🎯 POLYMARKET SMART WALLET TRADE DETECTED\n\n"
-                                        f"Wallet involved in contract: {contract_address}\n"
-                                        f"Block: {block_number}\n"
-                                        f"https://polygonscan.com/tx/{tx_hash.hex()}"
-                                    )
-
-                                    print(message)
-                                    send_telegram(message)
+                            print(message)
+                            send_telegram(message)
 
                 last_block = current_block
 
@@ -141,17 +90,13 @@ def monitor():
 
         except Exception as e:
             print("Loop error:", e)
-            time.sleep(10)
-
-# ============================
-# FLASK KEEP ALIVE
-# ============================
+            time.sleep(5)
 
 app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Smart Wallet Engine Running"
+    return "Verification Running"
 
 threading.Thread(target=monitor, daemon=True).start()
 
