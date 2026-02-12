@@ -1,109 +1,129 @@
-import os
-import time
 import requests
-from web3 import Web3
-from web3.middleware import ExtraDataToPOAMiddleware
+import time
+from datetime import datetime
 
-# =====================
-# ENV
-# =====================
+# ==============================
+# CONFIG
+# ==============================
 
-RPC = os.getenv("RPC")
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+SMART_WALLETS = {
+    "0x6d3c5bd13984b2de47c3a88ddc455309aab3d294".lower(),
+    "0xee613b3fc183ee44f9da9c05f53e2da107e3debf".lower(),
+    "0x204f72f35326db932158cba6adff0b9a1da95e14".lower()
+}
 
-if RPC is None:
-    raise Exception("RPC missing")
+TELEGRAM_TOKEN = "8520159588:AAGD8tjEWwDpStwKHQTx8fvXLvRL-5WS3MI"
+TELEGRAM_CHAT_ID = "7154046718"
 
-if TELEGRAM_TOKEN is None or TELEGRAM_CHAT_ID is None:
-    raise Exception("Telegram missing")
+MIN_TRADE_USD = 1  # $1 threshold for testing
 
-# =====================
-# WEB3
-# =====================
+# ==============================
+# TELEGRAM FUNCTION
+# ==============================
 
-w3 = Web3(Web3.HTTPProvider(RPC))
-w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
-
-if not w3.is_connected():
-    raise Exception("Polygon connection failed")
-
-print("Connected to Polygon")
-print("Block:", w3.eth.block_number)
-
-# =====================
-# SMART WALLETS
-# =====================
-
-SMART_WALLETS = set()
-SMART_WALLETS.add(w3.to_checksum_address("0x6d3c5bd13984b2de47c3a88ddc455309aab3d294"))
-SMART_WALLETS.add(w3.to_checksum_address("0xee613b3fc183ee44f9da9c05f53e2da107e3debf"))
-SMART_WALLETS.add(w3.to_checksum_address("0x204f72f35326db932158cba6adff0b9a1da95e14"))
-
-print("Tracking wallets:", len(SMART_WALLETS))
-
-# =====================
-# POLYMARKET CONTRACT
-# =====================
-
-POLYMARKET_EXCHANGE = w3.to_checksum_address(
-    "0x4bfb41d5b3570defd03c39a9a4d8de6bd8b8982e"
-)
-
-# =====================
-# TELEGRAM
-# =====================
-
-def send_telegram(msg):
-    url = "https://api.telegram.org/bot" + TELEGRAM_TOKEN + "/sendMessage"
-    data = {
+def send_telegram(message):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {
         "chat_id": TELEGRAM_CHAT_ID,
-        "text": msg
+        "text": message
     }
     try:
-        requests.post(url, data=data, timeout=10)
-    except:
-        print("Telegram failed")
+        requests.post(url, json=payload, timeout=10)
+    except Exception as e:
+        print("Telegram error:", e)
 
-send_telegram("Smart Wallet Engine Started")
 
-# =====================
-# MAIN LOOP
-# =====================
+# ==============================
+# FETCH RECENT TRADES
+# ==============================
 
-last_block = w3.eth.block_number
+def fetch_recent_trades():
+    url = "https://clob.polymarket.com/trades"
+    try:
+        r = requests.get(url, timeout=10)
+        return r.json()
+    except Exception as e:
+        print("Trade fetch error:", e)
+        return []
+
+
+# ==============================
+# FETCH MARKET INFO
+# ==============================
+
+def fetch_market_info(market_id):
+    try:
+        url = f"https://clob.polymarket.com/markets/{market_id}"
+        r = requests.get(url, timeout=10)
+        data = r.json()
+
+        event_name = data.get("question", "Unknown Event")
+        yes_price = data.get("bestBid", "N/A")
+        no_price = data.get("bestAsk", "N/A")
+
+        return event_name, yes_price, no_price
+    except Exception as e:
+        print("Market fetch error:", e)
+        return "Unknown Event", "N/A", "N/A"
+
+
+# ==============================
+# ENGINE LOOP
+# ==============================
+
+print("🧠 Smart Wallet API Engine Online")
+print(f"Tracking {len(SMART_WALLETS)} wallets")
+print("Monitoring Polymarket trades...")
+
+seen_trade_ids = set()
 
 while True:
     try:
-        current_block = w3.eth.block_number
+        trades = fetch_recent_trades()
 
-        if current_block > last_block:
+        for trade in trades:
+            trade_id = trade.get("id")
+            if not trade_id:
+                continue
 
-            for block_number in range(last_block + 1, current_block + 1):
+            if trade_id in seen_trade_ids:
+                continue
 
-                block = w3.eth.get_block(block_number, full_transactions=True)
+            seen_trade_ids.add(trade_id)
 
-                for tx in block.transactions:
+            wallet = trade.get("maker", "").lower()
+            if wallet not in SMART_WALLETS:
+                continue
 
-                    if tx["from"] not in SMART_WALLETS:
-                        continue
+            size = float(trade.get("size", 0))
+            price = float(trade.get("price", 0))
+            side = trade.get("side", "").upper()
+            market_id = trade.get("market")
 
-                    if tx["to"] != POLYMARKET_EXCHANGE:
-                        continue
+            usd_value = size * price
 
-                    tx_hash = tx["hash"].hex()
+            if usd_value < MIN_TRADE_USD:
+                continue
 
-                    message = "Polymarket interaction detected\n"
-                    message += "Wallet: " + tx["from"] + "\n"
-                    message += "Tx: https://polygonscan.com/tx/" + tx_hash
+            event_name, yes_price, no_price = fetch_market_info(market_id)
 
-                    send_telegram(message)
+            message = (
+                f"🔥 SMART WALLET TRADE DETECTED\n\n"
+                f"Wallet: {wallet}\n"
+                f"Event: {event_name}\n\n"
+                f"Side: {side}\n"
+                f"Trade Size: ${usd_value:.2f}\n\n"
+                f"Current YES Price: {yes_price}\n"
+                f"Current NO Price: {no_price}\n\n"
+                f"Time: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC"
+            )
 
-            last_block = current_block
+            print(message)
+            send_telegram(message)
 
-        print("Alive | Block", current_block)
-        time.sleep(2)
+        print("Alive | API Monitoring")
+        time.sleep(15)
 
     except Exception as e:
         print("Loop error:", e)
-        time.sleep(5)
+        time.sleep(10)
