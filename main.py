@@ -1,67 +1,108 @@
 import os
 import time
 import requests
-from datetime import datetime, timezone
 from web3 import Web3
-from web3.middleware import geth_poa_middleware
+from datetime import datetime, timezone
 
-# =========================
-# ENV VARIABLES
-# =========================
+# ==============================
+# LOAD ENV VARIABLES
+# ==============================
 
-RPC_URL = os.getenv("RPC_URL")
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+RPC = os.getenv("RPC")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
-if not RPC_URL:
-    raise Exception("❌ RPC_URL not set in Railway variables")
+if not RPC:
+    raise Exception("RPC not set in Railway variables")
 
-if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-    raise Exception("❌ Telegram credentials missing")
+if not TELEGRAM_CHAT_ID:
+    raise Exception("TELEGRAM_CHAT_ID not set in Railway variables")
 
-# =========================
+if not TELEGRAM_TOKEN:
+    raise Exception("TELEGRAM_TOKEN not set in Railway variables")
+
+# ==============================
 # TELEGRAM FUNCTION
-# =========================
+# ==============================
 
-def send_telegram(message: str):
+def send_telegram(message):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+
         payload = {
             "chat_id": TELEGRAM_CHAT_ID,
             "text": message
         }
-        requests.post(url, json=payload, timeout=10)
+
+        response = requests.post(url, json=payload, timeout=10)
+
+        if response.status_code != 200:
+            print("Telegram error:", response.text)
+
     except Exception as e:
-        print("Telegram error:", e)
+        print("Telegram send failed:", str(e))
 
-# =========================
-# WEB3 CONNECTION
-# =========================
 
-print("🔌 Connecting to Polygon RPC...")
+# ==============================
+# CONNECT TO POLYGON
+# ==============================
 
-w3 = Web3(Web3.HTTPProvider(RPC_URL, request_kwargs={"timeout": 30}))
+print("🔌 Connecting to RPC...")
+print("RPC:", RPC[:40] + "...")
 
-# Inject POA middleware (REQUIRED FOR POLYGON)
-w3.middleware_onion.inject(geth_poa_middleware, layer=0)
+try:
+    w3 = Web3(Web3.HTTPProvider(RPC, request_kwargs={"timeout": 30}))
 
-if not w3.is_connected():
-    raise Exception("❌ Failed to connect to Polygon RPC")
+    if not w3.is_connected():
+        raise Exception("Web3 connection failed")
+
+    print("✅ Connected to Polygon")
+
+except Exception as e:
+    print("❌ RPC CONNECTION FAILED:", str(e))
+    raise e
+
+
+# ==============================
+# START ENGINE
+# ==============================
 
 current_block = w3.eth.block_number
+today = datetime.now(timezone.utc).date()
 
-print("✅ Connected to Polygon")
-print("📦 Current Block:", current_block)
+startup_message = f"""
+🧠 Smart Wallet Quant Engine ONLINE
 
-send_telegram(
-    f"🧠 Smart Cluster Quant Engine STABLE\n"
-    f"✅ Connected to Polygon\n"
-    f"📦 Block: {current_block}\n"
-    f"🕒 {datetime.now(timezone.utc)}"
-)
+📦 Current Block: {current_block}
+📅 Date (UTC): {today}
 
-# =========================
-# MAIN LOOP (STABLE CORE)
-# =========================
+🚀 Engine Running
+"""
 
-print("🚀 Engine R
+print(startup_message)
+send_telegram(startup_message)
+
+
+# ==============================
+# HEARTBEAT LOOP
+# ==============================
+
+last_block = current_block
+
+while True:
+    try:
+        block = w3.eth.block_number
+
+        if block != last_block:
+            last_block = block
+
+            heartbeat_message = f"""
+📦 New Block Detected
+Block: {block}
+Time: {datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC
+"""
+
+            print(heartbeat_message.strip())
+            send_telegram(heartbeat_message.strip())
+
+        time.
