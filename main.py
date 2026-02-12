@@ -7,7 +7,7 @@ from web3.middleware import ExtraDataToPOAMiddleware
 # CONFIG
 # ==============================
 
-RPC_URL = "https://polygon-rpc.com"
+RPC_URL = "https://polygon-mainnet.g.alchemy.com/v2/5C0VcEocSzKMERi35xguh"
 
 TELEGRAM_TOKEN = "8520159588:AAGD8tjEWwDpStwKHQTx8fvXLvRL-5WS3MI"
 CHAT_ID = "7154046718"
@@ -40,13 +40,16 @@ print("Tracking", len(SMART_WALLETS), "wallets")
 def send_telegram(message):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        data = {"chat_id": CHAT_ID, "text": message}
-        requests.post(url, data=data, timeout=10)
+        payload = {
+            "chat_id": CHAT_ID,
+            "text": message
+        }
+        requests.post(url, data=payload, timeout=10)
     except Exception as e:
         print("Telegram error:", e)
 
 # ==============================
-# POLLING ENGINE (LOW RPC MODE)
+# ENGINE LOOP
 # ==============================
 
 last_block = w3.eth.block_number
@@ -58,7 +61,7 @@ while True:
 
         if current_block > last_block:
 
-            # Only fetch block headers (NO full tx objects)
+            # Get block hashes only (lightweight)
             block = w3.eth.get_block(current_block, full_transactions=False)
 
             for tx_hash in block.transactions:
@@ -67,15 +70,16 @@ while True:
 
                 if tx["from"] in SMART_WALLETS:
 
-                    value_usd = w3.from_wei(tx["value"], "ether")
+                    value_eth = w3.from_wei(tx["value"], "ether")
+                    value_usd = float(value_eth)
 
-                    if float(value_usd) >= MIN_USD_THRESHOLD:
+                    if value_usd >= MIN_USD_THRESHOLD:
 
                         message = (
                             "🚨 Smart Wallet Activity\n\n"
                             f"Wallet: {tx['from']}\n"
                             f"Block: {current_block}\n"
-                            f"Value: ${round(float(value_usd), 2)}\n"
+                            f"Value: ${round(value_usd, 2)}\n"
                             f"Tx: https://polygonscan.com/tx/{tx_hash.hex()}"
                         )
 
@@ -85,7 +89,7 @@ while True:
             last_block = current_block
             print("Alive | Block", current_block)
 
-        time.sleep(12)  # slower polling to avoid rate limits
+        time.sleep(10)  # safe polling rate for Alchemy
 
     except Exception as e:
         print("Loop error:", e)
