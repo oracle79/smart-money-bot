@@ -1,6 +1,7 @@
 import time
 import threading
 import requests
+from collections import defaultdict, deque
 from flask import Flask
 from web3 import Web3
 from web3.middleware import ExtraDataToPOAMiddleware
@@ -13,8 +14,11 @@ ALCHEMY_URL = "https://polygon-mainnet.g.alchemy.com/v2/5C0VcEocSzKMERi35xguh"
 TELEGRAM_TOKEN = "YOUR_TELEGRAM_TOKEN"
 CHAT_ID = "YOUR_CHAT_ID"
 
-ALERT_THRESHOLD = 1000  # $1,000+
+WINDOW_SECONDS = 300       # 5 minutes
+SHARE_THRESHOLD = 1000     # Net shares
 POLL_INTERVAL = 4
+
+ZERO = "0x0000000000000000000000000000000000000000"
 
 CTF_ADDRESS = Web3.to_checksum_address(
     "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"
@@ -52,7 +56,7 @@ ctf_contract = w3.eth.contract(
 )
 
 print("Connected to Polygon")
-print(f"Monitoring CTF contract: {CTF_ADDRESS}")
+print("🌊 Global Flow Accumulation Engine Online")
 
 # =========================
 # TELEGRAM
@@ -66,12 +70,20 @@ def send_telegram(message):
         print("Telegram error:", e)
 
 # =========================
+# FLOW STORAGE
+# =========================
+
+# wallet -> tokenID -> deque[(timestamp, share_delta)]
+flow_data = defaultdict(lambda: defaultdict(deque))
+alerted = set()
+
+# =========================
 # MONITOR
 # =========================
 
 def monitor():
-    print("🎯 Polymarket ERC1155 Monitor Online")
-    send_telegram("🚀 Polymarket ERC1155 Monitor Started")
+
+    send_telegram("🚀 Global Polymarket Flow Engine Started")
 
     last_block = w3.eth.block_number
 
@@ -90,35 +102,52 @@ def monitor():
 
                     from_addr = event["args"]["from"]
                     to_addr = event["args"]["to"]
+
+                    if from_addr.lower() == ZERO or to_addr.lower() == ZERO:
+                        continue  # ignore mint/burn
+
                     token_id = event["args"]["id"]
                     raw_value = event["args"]["value"]
-
-                    # Polymarket positions use 6 decimals
                     shares = raw_value / 1_000_000
 
-                    print(
-                        f"Transfer detected | Shares: {shares:.2f} | "
-                        f"From: {from_addr} | To: {to_addr}"
-                    )
+                    now = time.time()
 
-                    if shares >= ALERT_THRESHOLD:
+                    # Buyer positive
+                    flow_data[to_addr][token_id].append((now, shares))
 
-                        tx_hash = event["transactionHash"].hex()
+                    # Seller negative
+                    flow_data[from_addr][token_id].append((now, -shares))
 
-                        message = (
-                            "🔥 POLYMARKET LARGE POSITION TRANSFER\n\n"
-                            f"Shares: {shares:,.0f}\n"
-                            f"From: {from_addr}\n"
-                            f"To: {to_addr}\n"
-                            f"TokenID: {token_id}\n"
-                            f"Block: {event['blockNumber']}\n\n"
-                            f"https://polygonscan.com/tx/{tx_hash}"
-                        )
+                    # Clean old trades + calculate net
+                    for wallet in [to_addr, from_addr]:
 
-                        print("ALERT TRIGGERED")
-                        print(message)
+                        dq = flow_data[wallet][token_id]
 
-                        send_telegram(message)
+                        # Remove old entries
+                        while dq and now - dq[0][0] > WINDOW_SECONDS:
+                            dq.popleft()
+
+                        net = sum(x[1] for x in dq)
+
+                        key = (wallet, token_id)
+
+                        if abs(net) >= SHARE_THRESHOLD and key not in alerted:
+
+                            direction = "BUYING" if net > 0 else "SELLING"
+
+                            message = (
+                                "🔥 POLYMARKET ACCUMULATION DETECTED\n\n"
+                                f"Wallet: {wallet}\n"
+                                f"Direction: {direction}\n"
+                                f"Net Shares (5m): {net:,.0f}\n"
+                                f"TokenID: {token_id}\n"
+                                f"Block: {event['blockNumber']}"
+                            )
+
+                            print(message)
+                            send_telegram(message)
+
+                            alerted.add(key)
 
                 last_block = latest_block
 
@@ -137,7 +166,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Polymarket ERC1155 Monitor Running"
+    return "Global Flow Engine Running"
 
 threading.Thread(target=monitor, daemon=True).start()
 
