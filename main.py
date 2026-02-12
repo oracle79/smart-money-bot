@@ -19,7 +19,7 @@ if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
     raise Exception("Telegram variables missing")
 
 # ==============================
-# WEB3 CONNECTION
+# WEB3
 # ==============================
 
 w3 = Web3(Web3.HTTPProvider(RPC))
@@ -35,19 +35,27 @@ print("Polygon Block:", w3.eth.block_number)
 # ==============================
 
 def send_telegram(message):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": message
-    }
     try:
-        requests.post(url, json=payload, timeout=10)
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        requests.post(url, json={
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": message
+        }, timeout=10)
     except Exception as e:
         print("Telegram error:", e)
 
 # ==============================
 # CONFIG
 # ==============================
+
+TOP_WALLETS = {}
+TRADE_LOG = defaultdict(list)
+
+CLUSTER_THRESHOLD = 3
+CLUSTER_WINDOW_MINUTES = 60
+LARGE_TRADE_USD = 1000
+CONVICTION_THRESHOLD = 0.25
+HEARTBEAT_INTERVAL = 600
 
 USDC_ADDRESS = Web3.to_checksum_address(
     "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
@@ -66,18 +74,8 @@ USDC_ABI = [{
 
 usdc_contract = w3.eth.contract(address=USDC_ADDRESS, abi=USDC_ABI)
 
-TOP_WALLETS = {}
-TRADE_LOG = defaultdict(list)
-
-CLUSTER_THRESHOLD = 3
-CLUSTER_WINDOW_MINUTES = 60
-CONVICTION_THRESHOLD = 0.25
-LARGE_TRADE_USD = 1000
-
-HEARTBEAT_INTERVAL = 600  # 10 minutes
-
 # ==============================
-# LEADERBOARD FETCH
+# LEADERBOARD FETCH (FIXED)
 # ==============================
 
 def fetch_top_wallets():
@@ -85,15 +83,30 @@ def fetch_top_wallets():
 
     print("🔄 Fetching leaderboard...")
 
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json"
+    }
+
     try:
         url = "https://gamma-api.polymarket.com/leaderboard?period=weekly"
-        response = requests.get(url, timeout=10)
+        response = requests.get(url, headers=headers, timeout=15)
+
+        if response.status_code != 200:
+            send_telegram(f"❌ Leaderboard HTTP {response.status_code}")
+            print("Leaderboard HTTP error:", response.status_code)
+            return
+
         data = response.json()
+
+        # Sometimes data comes wrapped inside object
+        if isinstance(data, dict) and "data" in data:
+            data = data["data"]
 
         wallets = {}
 
         for entry in data[:500]:
-            wallet = entry.get("address")
+            wallet = entry.get("address") or entry.get("walletAddress")
             pnl = float(entry.get("profit", 0))
             volume = float(entry.get("volume", 0))
 
@@ -108,7 +121,7 @@ def fetch_top_wallets():
 
         wallet_count = len(TOP_WALLETS)
 
-        print(f"✅ Wallets fetched: {wallet_count}")
+        print("Wallets fetched:", wallet_count)
 
         send_telegram(
             f"📊 Leaderboard Loaded\n"
@@ -117,11 +130,11 @@ def fetch_top_wallets():
         )
 
     except Exception as e:
-        print("❌ Failed to fetch leaderboard:", e)
-        send_telegram("❌ Failed to fetch leaderboard")
+        print("Leaderboard fetch error:", e)
+        send_telegram(f"❌ Leaderboard Fetch Failed")
 
 # ==============================
-# CLUSTER DETECTION
+# CLUSTER LOGIC
 # ==============================
 
 def check_cluster(wallet, direction, market, timestamp):
@@ -140,20 +153,16 @@ def check_cluster(wallet, direction, market, timestamp):
 
     if len(yes_wallets) >= CLUSTER_THRESHOLD:
         send_telegram(
-            f"🔥 CLUSTER DETECTED (YES)\n"
-            f"Market: {market}\n"
-            f"Wallets: {len(yes_wallets)}"
+            f"🔥 CLUSTER YES\nMarket: {market}\nWallets: {len(yes_wallets)}"
         )
 
     if len(no_wallets) >= CLUSTER_THRESHOLD:
         send_telegram(
-            f"🔥 CLUSTER DETECTED (NO)\n"
-            f"Market: {market}\n"
-            f"Wallets: {len(no_wallets)}"
+            f"🔥 CLUSTER NO\nMarket: {market}\nWallets: {len(no_wallets)}"
         )
 
 # ==============================
-# MONITOR LOOP
+# MONITOR
 # ==============================
 
 def monitor():
@@ -169,7 +178,6 @@ def monitor():
         try:
             current_block = w3.eth.block_number
 
-            # Heartbeat every 10 min
             if time.time() - last_heartbeat > HEARTBEAT_INTERVAL:
                 send_telegram(
                     f"💓 Engine Alive\n"
@@ -186,7 +194,6 @@ def monitor():
                 )
 
                 for log in logs:
-
                     from_addr = log["args"]["from"].lower()
                     value = log["args"]["value"] / 1_000_000
                     tx_hash = log["transactionHash"].hex()
@@ -196,23 +203,21 @@ def monitor():
                         bankroll = TOP_WALLETS[from_addr]["est_bankroll"]
                         conviction = value / bankroll
 
-                        direction = "YES"  # placeholder
-                        market = tx_hash[:10]  # placeholder
+                        direction = "YES"
+                        market = tx_hash[:10]
                         timestamp = datetime.utcnow()
 
                         send_telegram(
                             f"🚨 LARGE TRADE\n"
                             f"Wallet: {from_addr}\n"
                             f"Size: ${value:,.0f}\n"
-                            f"Block: {current_block}\n"
                             f"Tx: https://polygonscan.com/tx/{tx_hash}"
                         )
 
                         if conviction >= CONVICTION_THRESHOLD:
                             send_telegram(
                                 f"💰 HIGH CONVICTION\n"
-                                f"Wallet: {from_addr}\n"
-                                f"{conviction:.0%} of est bankroll"
+                                f"{conviction:.0%} of bankroll"
                             )
 
                         check_cluster(from_addr, direction, market, timestamp)
@@ -226,7 +231,7 @@ def monitor():
             time.sleep(5)
 
 # ==============================
-# START ENGINE
+# START
 # ==============================
 
 fetch_top_wallets()
