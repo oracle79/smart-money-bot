@@ -21,7 +21,7 @@ if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
     raise Exception("Telegram variables not set")
 
 # ============================
-# WEB3 SETUP (Polygon POA fix)
+# WEB3 SETUP
 # ============================
 
 w3 = Web3(Web3.HTTPProvider(RPC))
@@ -71,10 +71,7 @@ SMART_WALLETS = [w3.to_checksum_address(w) for w in SMART_WALLETS]
 # CONFIG
 # ============================
 
-TRADE_THRESHOLD_USD = 100
-CLUSTER_WINDOW = timedelta(hours=1)
-
-recent_trades = []
+TRADE_THRESHOLD_USD = 1  # lowered for testing
 
 # ============================
 # TELEGRAM
@@ -84,66 +81,26 @@ def send_telegram(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     data = {
         "chat_id": TELEGRAM_CHAT_ID,
-        "text": message,
-        "parse_mode": "Markdown"
+        "text": message
     }
     try:
         requests.post(url, data=data, timeout=10)
-    except:
-        pass
+    except Exception as e:
+        print("Telegram error:", e)
 
 # ============================
-# POLYMARKET API FETCH
-# ============================
-
-def fetch_market_info(condition_id):
-    try:
-        url = f"https://gamma-api.polymarket.com/markets?condition_ids={condition_id}"
-        r = requests.get(url, timeout=10)
-        data = r.json()
-        if len(data) == 0:
-            return None, None, None
-
-        market = data[0]
-        event_name = market.get("question")
-        yes_price = market.get("outcomes")[0]["price"]
-        no_price = market.get("outcomes")[1]["price"]
-
-        return event_name, yes_price, no_price
-    except:
-        return None, None, None
-
-# ============================
-# CLUSTER DETECTION
-# ============================
-
-def check_cluster(new_trade):
-    now = datetime.utcnow()
-    filtered = [
-        t for t in recent_trades
-        if now - t["time"] < CLUSTER_WINDOW
-    ]
-
-    same = [
-        t for t in filtered
-        if t["condition"] == new_trade["condition"]
-        and t["side"] == new_trade["side"]
-    ]
-
-    if len(same) >= 2:
-        return True
-
-    return False
-
-# ============================
-# MAIN LOOP
+# STARTUP MESSAGE
 # ============================
 
 print("🧠 Smart Wallet Quant Engine Online")
 print("Polygon Block:", w3.eth.block_number)
 print("Tracking Wallets:", len(SMART_WALLETS))
 
-send_telegram("🧠 Smart Wallet Engine Online\nTracking: " + str(len(SMART_WALLETS)))
+send_telegram("Engine started. Tracking " + str(len(SMART_WALLETS)) + " wallets.")
+
+# ============================
+# MAIN LOOP
+# ============================
 
 last_block = w3.eth.block_number
 
@@ -158,42 +115,26 @@ while True:
                 for tx in block.transactions:
                     if tx["from"] in SMART_WALLETS:
 
+                        print("Detected TX from smart wallet:", tx["from"])
+
                         value_usd = float(w3.from_wei(tx["value"], "ether")) * 2000
+
+                        print("Estimated value:", value_usd)
 
                         if value_usd >= TRADE_THRESHOLD_USD:
 
-                            condition_id = tx["to"]
-                            side = "UNKNOWN"
-
-                            event_name, yes_price, no_price = fetch_market_info(condition_id)
-
-                            trade = {
-                                "wallet": tx["from"],
-                                "condition": condition_id,
-                                "side": side,
-                                "time": datetime.utcnow()
-                            }
-
-                            recent_trades.append(trade)
-
-                            cluster = check_cluster(trade)
-
-                            message = "🔥 *SMART WALLET TRADE*\n\n"
-                            message += f"Wallet: `{tx['from']}`\n"
-                            message += f"Size: ${round(value_usd,2)}+\n"
-                            message += f"Event: {event_name}\n"
-                            message += f"YES: {yes_price}\n"
-                            message += f"NO: {no_price}\n"
-                            message += f"https://polygonscan.com/tx/{tx['hash'].hex()}"
-
-                            if cluster:
-                                message = "🚨 *CLUSTER DETECTED*\n\n" + message
+                            message = (
+                                "SMART WALLET ACTIVITY\n\n"
+                                f"Wallet: {tx['from']}\n"
+                                f"Est Value: ${round(value_usd,2)}\n"
+                                f"https://polygonscan.com/tx/{tx['hash'].hex()}"
+                            )
 
                             send_telegram(message)
 
             last_block = current_block
 
-        time.sleep(3)
+        time.sleep(2)
 
     except Exception as e:
         print("Loop error:", e)
