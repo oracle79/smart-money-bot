@@ -1,11 +1,14 @@
 import os
 import time
 import requests
+from datetime import datetime, timedelta
+from collections import defaultdict
 from web3 import Web3
+from web3.middleware import ExtraDataToPOAMiddleware
 
-# =========================
+# ============================
 # ENV VARIABLES
-# =========================
+# ============================
 
 RPC = os.getenv("RPC")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -14,26 +17,24 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 if not RPC:
     raise Exception("RPC not set")
 
-if not TELEGRAM_TOKEN:
-    raise Exception("TELEGRAM_TOKEN not set")
+if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+    raise Exception("Telegram variables not set")
 
-if not TELEGRAM_CHAT_ID:
-    raise Exception("TELEGRAM_CHAT_ID not set")
-
-# =========================
-# WEB3 CONNECTION
-# =========================
+# ============================
+# WEB3 SETUP (Polygon POA fix)
+# ============================
 
 w3 = Web3(Web3.HTTPProvider(RPC))
+w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
 
 if not w3.is_connected():
-    raise Exception("Failed to connect to RPC")
+    raise Exception("Web3 failed to connect")
 
 print("Connected to Polygon")
 
-# =========================
-# SMART WALLET LIST
-# =========================
+# ============================
+# SMART WALLETS
+# ============================
 
 SMART_WALLETS = [
 "0xdb27bf2ac5d428a9c63dbc914611036855a6c56e",
@@ -66,52 +67,85 @@ SMART_WALLETS = [
 
 SMART_WALLETS = [w3.to_checksum_address(w) for w in SMART_WALLETS]
 
-print("Smart wallets loaded:", len(SMART_WALLETS))
+# ============================
+# CONFIG
+# ============================
 
-# =========================
+TRADE_THRESHOLD_USD = 100
+CLUSTER_WINDOW = timedelta(hours=1)
+
+recent_trades = []
+
+# ============================
 # TELEGRAM
-# =========================
+# ============================
 
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {
+    data = {
         "chat_id": TELEGRAM_CHAT_ID,
         "text": message,
-        "parse_mode": "HTML"
+        "parse_mode": "Markdown"
     }
     try:
-        requests.post(url, data=payload, timeout=10)
+        requests.post(url, data=data, timeout=10)
     except:
         pass
 
-# =========================
-# CLUSTER STORAGE
-# =========================
+# ============================
+# POLYMARKET API FETCH
+# ============================
 
-cluster_memory = {}
-TIME_WINDOW = 3600  # 1 hour
-MIN_CLUSTER = 2
+def fetch_market_info(condition_id):
+    try:
+        url = f"https://gamma-api.polymarket.com/markets?condition_ids={condition_id}"
+        r = requests.get(url, timeout=10)
+        data = r.json()
+        if len(data) == 0:
+            return None, None, None
 
-# =========================
-# ENGINE START
-# =========================
+        market = data[0]
+        event_name = market.get("question")
+        yes_price = market.get("outcomes")[0]["price"]
+        no_price = market.get("outcomes")[1]["price"]
 
-start_block = w3.eth.block_number
-print("🧠 Smart Wallet Cluster Engine Online")
-print("Polygon Block:", start_block)
+        return event_name, yes_price, no_price
+    except:
+        return None, None, None
+
+# ============================
+# CLUSTER DETECTION
+# ============================
+
+def check_cluster(new_trade):
+    now = datetime.utcnow()
+    filtered = [
+        t for t in recent_trades
+        if now - t["time"] < CLUSTER_WINDOW
+    ]
+
+    same = [
+        t for t in filtered
+        if t["condition"] == new_trade["condition"]
+        and t["side"] == new_trade["side"]
+    ]
+
+    if len(same) >= 2:
+        return True
+
+    return False
+
+# ============================
+# MAIN LOOP
+# ============================
+
+print("🧠 Smart Wallet Quant Engine Online")
+print("Polygon Block:", w3.eth.block_number)
 print("Tracking Wallets:", len(SMART_WALLETS))
 
-send_telegram(
-    f"🧠 Smart Wallet Cluster Engine Online\n"
-    f"Block: {start_block}\n"
-    f"Tracking: {len(SMART_WALLETS)} wallets"
-)
+send_telegram("🧠 Smart Wallet Engine Online\nTracking: " + str(len(SMART_WALLETS)))
 
-last_block = start_block
-
-# =========================
-# MAIN LOOP
-# =========================
+last_block = w3.eth.block_number
 
 while True:
     try:
@@ -122,48 +156,44 @@ while True:
                 block = w3.eth.get_block(block_num, full_transactions=True)
 
                 for tx in block.transactions:
-                    if tx["from"] in SMART_WALLETS and tx["to"]:
+                    if tx["from"] in SMART_WALLETS:
 
-                        contract = tx["to"]
-                        wallet = tx["from"]
-                        timestamp = block.timestamp
+                        value_usd = float(w3.from_wei(tx["value"], "ether")) * 2000
 
-                        if contract not in cluster_memory:
-                            cluster_memory[contract] = []
+                        if value_usd >= TRADE_THRESHOLD_USD:
 
-                        cluster_memory[contract].append((wallet, timestamp))
+                            condition_id = tx["to"]
+                            side = "UNKNOWN"
 
-                        # Clean old entries
-                        cluster_memory[contract] = [
-                            (w, t)
-                            for (w, t) in cluster_memory[contract]
-                            if timestamp - t <= TIME_WINDOW
-                        ]
+                            event_name, yes_price, no_price = fetch_market_info(condition_id)
 
-                        wallets_in_window = list(set([w for w, t in cluster_memory[contract]]))
+                            trade = {
+                                "wallet": tx["from"],
+                                "condition": condition_id,
+                                "side": side,
+                                "time": datetime.utcnow()
+                            }
 
-                        if len(wallets_in_window) >= MIN_CLUSTER:
+                            recent_trades.append(trade)
 
-                            message = (
-                                "🚨 SMART WALLET CLUSTER DETECTED\n\n"
-                                f"Contract: {contract}\n"
-                                f"Wallets ({len(wallets_in_window)}):\n"
-                            )
+                            cluster = check_cluster(trade)
 
-                            for w in wallets_in_window:
-                                message += f"- {w}\n"
+                            message = "🔥 *SMART WALLET TRADE*\n\n"
+                            message += f"Wallet: `{tx['from']}`\n"
+                            message += f"Size: ${round(value_usd,2)}+\n"
+                            message += f"Event: {event_name}\n"
+                            message += f"YES: {yes_price}\n"
+                            message += f"NO: {no_price}\n"
+                            message += f"https://polygonscan.com/tx/{tx['hash'].hex()}"
 
-                            message += f"\nBlock: {block_num}"
-                            message += f"\nhttps://polygonscan.com/address/{contract}"
+                            if cluster:
+                                message = "🚨 *CLUSTER DETECTED*\n\n" + message
 
                             send_telegram(message)
 
-                            cluster_memory[contract] = []
-
             last_block = current_block
 
-        print("Engine alive | Block", current_block)
-        time.sleep(5)
+        time.sleep(3)
 
     except Exception as e:
         print("Loop error:", e)
