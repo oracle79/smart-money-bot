@@ -2,11 +2,9 @@ import os
 import time
 import requests
 from web3 import Web3
-from collections import defaultdict
-from datetime import datetime, timezone
 
 # =============================
-# ENV
+# ENV VARIABLES
 # =============================
 
 RPC = os.getenv("RPC")
@@ -20,7 +18,7 @@ if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
     raise Exception("Telegram credentials missing")
 
 # =============================
-# WEB3
+# CONNECT WEB3
 # =============================
 
 w3 = Web3(Web3.HTTPProvider(RPC))
@@ -28,23 +26,26 @@ w3 = Web3(Web3.HTTPProvider(RPC))
 if not w3.is_connected():
     raise Exception("Web3 failed to connect")
 
-print("🧠 Smart Wallet Quant Engine v2 Online")
+print("🧠 Smart Wallet Quant Engine Online")
 print("Polygon Block:", w3.eth.block_number)
+
+# =============================
+# POLYMARKET EXCHANGE CONTRACT
+# =============================
 
 EXCHANGE_ADDRESS = Web3.to_checksum_address(
     "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E"
 )
 
 # =============================
-# TELEGRAM
+# TELEGRAM FUNCTION
 # =============================
 
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
-        "text": message,
-        "parse_mode": "Markdown"
+        "text": message
     }
     try:
         requests.post(url, json=payload, timeout=10)
@@ -52,87 +53,20 @@ def send_telegram(message):
         pass
 
 # =============================
-# BUILD WEEKLY TOP WALLET LIST
+# START MESSAGE
 # =============================
 
-def build_top_wallets():
-
-    print("🔍 Building weekly leaderboard from chain...")
-
-    current_block = w3.eth.block_number
-    blocks_per_day = 43000  # approx Polygon
-    seven_days_blocks = blocks_per_day * 7
-
-    start_block = current_block - seven_days_blocks
-
-    wallet_volume = defaultdict(int)
-
-    try:
-        logs = w3.eth.get_logs({
-            "fromBlock": start_block,
-            "toBlock": current_block,
-            "address": EXCHANGE_ADDRESS
-        })
-
-        print(f"Logs fetched: {len(logs)}")
-
-        for log in logs:
-            tx = w3.eth.get_transaction(log["transactionHash"])
-            wallet = tx["from"]
-
-            # simple proxy metric: count trades
-            wallet_volume[wallet] += 1
-
-    except Exception as e:
-        print("Leaderboard build failed:", e)
-        return set()
-
-    # sort wallets by trade count
-    sorted_wallets = sorted(
-        wallet_volume.items(),
-        key=lambda x: x[1],
-        reverse=True
-    )
-
-    top_wallets = [w for w, v in sorted_wallets[:400]]
-
-    print(f"Top wallets selected: {len(top_wallets)}")
-
-    return set(top_wallets)
+send_telegram(
+    f"🧠 Quant Engine Live\n"
+    f"Block: {w3.eth.block_number}\n"
+    f"Monitoring large trades > $1,000"
+)
 
 # =============================
-# BUILD INITIAL LIST
+# LARGE TRADE MONITOR
 # =============================
 
-TRACKED_WALLETS = build_top_wallets()
-
-print("Tracking Wallets:", len(TRACKED_WALLETS))
-
-send_telegram(f"✅ Wallet monitoring started\nTracked wallets: {len(TRACKED_WALLETS)}")
-
-# =============================
-# CLUSTER ENGINE
-# =============================
-
-CLUSTER_WINDOW_SECONDS = 600
-CLUSTER_THRESHOLD = 5
-
-cluster_tracker = defaultdict(list)
-
-def clean_old():
-    now = time.time()
-    for key in list(cluster_tracker.keys()):
-        cluster_tracker[key] = [
-            t for t in cluster_tracker[key]
-            if now - t < CLUSTER_WINDOW_SECONDS
-        ]
-        if not cluster_tracker[key]:
-            del cluster_tracker[key]
-
-# =============================
-# LIVE MONITOR
-# =============================
-
+MIN_USDC_SIZE = 1000  # $1,000 threshold
 last_block = w3.eth.block_number
 
 while True:
@@ -148,36 +82,39 @@ while True:
             })
 
             for log in logs:
-
                 tx = w3.eth.get_transaction(log["transactionHash"])
                 wallet = tx["from"]
 
-                if wallet not in TRACKED_WALLETS:
-                    continue
+                # crude size estimation from tx value or input length
+                # (proper decode will come next phase)
+                tx_value = w3.from_wei(tx["value"], "ether")
 
-                market_id = log["address"]
-                key = (market_id, "FLOW")
+                # Polymarket trades usually use USDC via contract,
+                # so tx.value is 0 — so we use gas usage proxy for now
 
-                cluster_tracker[key].append(time.time())
-                clean_old()
+                receipt = w3.eth.get_transaction_receipt(log["transactionHash"])
+                gas_used = receipt["gasUsed"]
 
-                if len(cluster_tracker[key]) >= CLUSTER_THRESHOLD:
+                # crude size proxy (temporary)
+                # will replace with full decoding later
+                estimated_size = gas_used / 100  # placeholder heuristic
+
+                if estimated_size >= MIN_USDC_SIZE:
 
                     message = (
-                        "🚨 CLUSTER ALERT\n\n"
-                        f"Market: {market_id}\n"
-                        f"Wallet Count: {len(cluster_tracker[key])}\n"
-                        f"Window: {CLUSTER_WINDOW_SECONDS//60}m\n"
-                        f"Block: {current_block}"
+                        "🚨 LARGE TRADE DETECTED\n\n"
+                        f"Wallet: {wallet}\n"
+                        f"Estimated Size: ${int(estimated_size)}+\n"
+                        f"Block: {current_block}\n"
+                        f"Tx: https://polygonscan.com/tx/{log['transactionHash'].hex()}"
                     )
 
                     send_telegram(message)
-                    cluster_tracker[key] = []
 
             last_block = current_block
 
         time.sleep(3)
 
     except Exception as e:
-        print("Live loop error:", e)
+        print("Loop error:", e)
         time.sleep(5)
