@@ -13,25 +13,24 @@ ALCHEMY_URL = "https://polygon-mainnet.g.alchemy.com/v2/5C0VcEocSzKMERi35xguh"
 TELEGRAM_TOKEN = "YOUR_TELEGRAM_TOKEN"
 CHAT_ID = "YOUR_CHAT_ID"
 
-ALERT_THRESHOLD_USD = 1000   # ✅ LOWERED TO $1K
+ALERT_THRESHOLD = 1000  # $1,000+
 POLL_INTERVAL = 5
 
-EXCHANGE_ADDRESS = Web3.to_checksum_address(
-    "0x4bfb41d5b3570defd03c39a9a4d8de6bd8b8982e"
+CONDITIONAL_TOKENS = Web3.to_checksum_address(
+    "0xCeAfDD6bc0bEF976fdCd1112955828E00543c0Ce"
 )
 
-# Minimal ABI for Fill event
-EXCHANGE_ABI = [
+# Minimal ABI for PositionSplit (mint event)
+CTF_ABI = [
     {
         "anonymous": False,
         "inputs": [
-            {"indexed": True, "name": "maker", "type": "address"},
-            {"indexed": True, "name": "taker", "type": "address"},
-            {"indexed": False, "name": "makerAmount", "type": "uint256"},
-            {"indexed": False, "name": "takerAmount", "type": "uint256"},
-            {"indexed": False, "name": "fee", "type": "uint256"}
+            {"indexed": True, "name": "stakeholder", "type": "address"},
+            {"indexed": False, "name": "collateralToken", "type": "address"},
+            {"indexed": False, "name": "conditionId", "type": "bytes32"},
+            {"indexed": False, "name": "amount", "type": "uint256"}
         ],
-        "name": "Fill",
+        "name": "PositionSplit",
         "type": "event"
     }
 ]
@@ -46,9 +45,9 @@ w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
 if not w3.is_connected():
     raise Exception("Failed to connect to Polygon")
 
-exchange_contract = w3.eth.contract(
-    address=EXCHANGE_ADDRESS,
-    abi=EXCHANGE_ABI
+ctf_contract = w3.eth.contract(
+    address=CONDITIONAL_TOKENS,
+    abi=CTF_ABI
 )
 
 print("Connected to Polygon")
@@ -69,8 +68,8 @@ def send_telegram(message):
 # =========================
 
 def monitor():
-    print("🎯 Polymarket $1K+ Trade Monitor Online")
-    send_telegram("🚀 $1K+ Polymarket Trade Monitor Started")
+    print("🎯 ConditionalTokens Monitor Online")
+    send_telegram("🚀 Polymarket Position Monitor Started")
 
     last_block = w3.eth.block_number
 
@@ -80,32 +79,29 @@ def monitor():
 
             if latest_block > last_block:
 
-                events = exchange_contract.events.Fill().get_logs(
+                events = ctf_contract.events.PositionSplit().get_logs(
                     from_block=last_block + 1,
                     to_block=latest_block
                 )
 
                 for event in events:
 
-                    maker = event["args"]["maker"]
-                    taker = event["args"]["taker"]
-                    taker_amount = event["args"]["takerAmount"]
+                    stakeholder = event["args"]["stakeholder"]
+                    raw_amount = event["args"]["amount"]
 
                     # USDC = 6 decimals
-                    usdc_amount = taker_amount / 1_000_000
+                    usdc_amount = raw_amount / 1_000_000
 
-                    # 👀 DEBUG LOG (always prints)
-                    print(f"Fill detected: ${usdc_amount:,.2f}")
+                    print(f"PositionSplit detected: ${usdc_amount:,.2f}")
 
-                    if usdc_amount >= ALERT_THRESHOLD_USD:
+                    if usdc_amount >= ALERT_THRESHOLD:
 
                         tx_hash = event["transactionHash"].hex()
 
                         message = (
-                            "🐋 POLYMARKET TRADE ALERT\n\n"
+                            "🔥 POLYMARKET POSITION MINT\n\n"
+                            f"Wallet: {stakeholder}\n"
                             f"Size: ${usdc_amount:,.0f}\n"
-                            f"Maker: {maker}\n"
-                            f"Taker: {taker}\n"
                             f"Block: {event['blockNumber']}\n\n"
                             f"https://polygonscan.com/tx/{tx_hash}"
                         )
@@ -132,7 +128,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Polymarket $1K+ Monitor Running"
+    return "ConditionalTokens Monitor Running"
 
 threading.Thread(target=monitor, daemon=True).start()
 
