@@ -161,7 +161,7 @@ while True:
 
                     value_usd = float(w3.from_wei(tx.value, "ether")) * 3000
 
-                    if value_usd < 1000:
+                    if value_usd < 100:
                         continue
 
                     timestamp = datetime.utcnow()
