@@ -18,7 +18,7 @@ TELEGRAM_CHAT_ID = "7154046718"
 MIN_TRADE_USD = 1  # $1 threshold for testing
 
 # ==============================
-# TELEGRAM FUNCTION
+# TELEGRAM
 # ==============================
 
 def send_telegram(message):
@@ -34,14 +34,27 @@ def send_telegram(message):
 
 
 # ==============================
-# FETCH RECENT TRADES
+# FETCH TRADES (FIXED)
 # ==============================
 
 def fetch_recent_trades():
-    url = "https://clob.polymarket.com/trades"
+    url = "https://clob.polymarket.com/trades?limit=50"
+
     try:
         r = requests.get(url, timeout=10)
-        return r.json()
+        data = r.json()
+
+        # API sometimes wraps trades inside "data"
+        if isinstance(data, dict) and "data" in data:
+            return data["data"]
+
+        # If already list
+        if isinstance(data, list):
+            return data
+
+        print("Unexpected trade response:", data)
+        return []
+
     except Exception as e:
         print("Trade fetch error:", e)
         return []
@@ -57,18 +70,22 @@ def fetch_market_info(market_id):
         r = requests.get(url, timeout=10)
         data = r.json()
 
+        if not isinstance(data, dict):
+            return "Unknown Event", "N/A", "N/A"
+
         event_name = data.get("question", "Unknown Event")
         yes_price = data.get("bestBid", "N/A")
         no_price = data.get("bestAsk", "N/A")
 
         return event_name, yes_price, no_price
+
     except Exception as e:
         print("Market fetch error:", e)
         return "Unknown Event", "N/A", "N/A"
 
 
 # ==============================
-# ENGINE LOOP
+# ENGINE
 # ==============================
 
 print("🧠 Smart Wallet API Engine Online")
@@ -82,6 +99,10 @@ while True:
         trades = fetch_recent_trades()
 
         for trade in trades:
+
+            if not isinstance(trade, dict):
+                continue
+
             trade_id = trade.get("id")
             if not trade_id:
                 continue
