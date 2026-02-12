@@ -2,7 +2,6 @@ import os
 import time
 import requests
 from web3 import Web3
-from web3.middleware import geth_poa_middleware
 
 # ===============================
 # ENV VARIABLES
@@ -23,13 +22,12 @@ if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
 # ===============================
 
 w3 = Web3(Web3.HTTPProvider(RPC))
-w3.middleware_onion.inject(geth_poa_middleware, layer=0)
 
 if not w3.is_connected():
     raise Exception("Web3 failed to connect")
 
 block = w3.eth.block_number
-print(f"🚀 Quant Engine Online | Connected to Polygon Block: {block}")
+print(f"🚀 Quant Engine Online | Polygon Block: {block}")
 
 # ===============================
 # TELEGRAM FUNCTION
@@ -41,12 +39,15 @@ def send_telegram(message):
         "chat_id": TELEGRAM_CHAT_ID,
         "text": message
     }
-    requests.post(url, json=payload)
+    try:
+        requests.post(url, json=payload, timeout=10)
+    except Exception as e:
+        print(f"Telegram error: {e}")
 
 send_telegram(f"🚀 Quant Engine Connected\nBlock: {block}")
 
 # ===============================
-# SIMPLE BLOCK MONITOR LOOP
+# BLOCK MONITOR LOOP
 # ===============================
 
 last_block = block
