@@ -1,12 +1,12 @@
 import os
 import time
 import requests
-from datetime import datetime, timedelta
+from collections import defaultdict
 from web3 import Web3
 
-# ================================
+# =============================
 # ENV VARIABLES
-# ================================
+# =============================
 
 RPC = os.getenv("RPC")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -15,197 +15,162 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 if not RPC:
     raise Exception("RPC not set")
 if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-    raise Exception("Telegram variables not set")
+    raise Exception("Telegram credentials missing")
 
-# ================================
-# CONNECT TO POLYGON
-# ================================
+# =============================
+# WEB3 SETUP
+# =============================
 
 w3 = Web3(Web3.HTTPProvider(RPC))
 
 if not w3.is_connected():
-    raise Exception("Failed to connect to Polygon")
+    raise Exception("Web3 failed to connect")
 
-print("🧠 Internal Smart Wallet Leaderboard Engine Online")
+print("🧠 Smart Wallet Cluster Engine Online")
 print("Polygon Block:", w3.eth.block_number)
 
-# ================================
-# CONFIG
-# ================================
+# =============================
+# SMART WALLETS
+# =============================
 
-USDC_CONTRACT = Web3.to_checksum_address(
-    "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
-)
+SMART_WALLETS = {
+    "0xdb27bf2ac5d428a9c63dbc914611036855a6c56e",
+    "0x6a72f61820b26b1fe4d956e17b6dc2a1ea3033ee",
+    "0x14964aefa2cd7caff7878b3820a690a03c5aa429",
+    "0x1d8a377c5020f612ce63a0a151970df64baae842",
+    "0x876426b52898c295848f56760dd24b55eda2604a",
+    "0xd6a3f0ec6c4a8ad680d580610c82ca57ff139489",
+    "0x6211f97a76ed5c4b1d658f637041ac5f293db89e",
+    "0x003932bc605249fbfeb9ea6c3e15ec6e868a6beb",
+    "0x04a39d068f4301195c25dcb4c1fe5a4f08a65213",
+    "0xccb290b1c145d1c95695d3756346bba9f1398586",
+    "0x99bd18bf3b49a82cbd5749eafb3bfb117406238e",
+    "0xa8e089ade142c95538e06196e09c85681112ad50",
+    "0x2005d16a84ceefa912d4e380cd32e7ff827875ea",
+    "0x5da48936d61eb18d66ca5fdd32ba2d2ba19be203",
+    "0x7e6fda10646a4343358c84004859adfea1c0c022",
+    "0x72b40c0012682ef52228ad53ef955f9e4f177d67",
+    "0x37e4728b3c4607fb2b3b205386bb1d1fb1a8c991",
+    "0x93abbc022ce98d6f45d4444b594791cc4b7a9723",
+    "0x63ce342161250d705dc0b16df89036c8e5f9ba9a",
+    "0x6e82b93eb57b01a63027bd0c6d2f3f04934a752c",
+    "0x0b9cae2b0dfe7a71c413e0604eaac1c352f87e44",
+    "0x4cbfc0c337dde457f7963b62fb57678ca1286cf0",
+    "0x19f19dd8ee1f7e5f6ec666987e2963a65971a9c6",
+    "0x96489abcb9f583d6835c8ef95ffc923d05a86825",
+    "0x3b5c629f114098b0dee345fb78b7a3a013c7126e",
+    "0x1057e7d3ddafc60a4aeb10a2bc5b543792449ea5"
+}
 
-MIN_TRADE_SIZE = 1000  # $1000 filter
-TOP_WALLET_LIMIT = 500
-CLUSTER_THRESHOLD = 3
-CLUSTER_WINDOW_MINUTES = 60
+print("Tracking Wallets:", len(SMART_WALLETS))
 
-# ================================
-# DATA STORAGE
-# ================================
-
-wallet_stats = {}
-cluster_memory = []
-
-last_dashboard = time.time()
-
-# ================================
+# =============================
 # TELEGRAM
-# ================================
+# =============================
 
-def send_telegram(message):
+def send_telegram(msg):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg})
+
+# =============================
+# POLYMARKET API HELPERS
+# =============================
+
+def fetch_market_info(contract):
     try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        payload = {
-            "chat_id": TELEGRAM_CHAT_ID,
-            "text": message,
-            "parse_mode": "Markdown"
+        url = f"https://gamma-api.polymarket.com/markets?clobTokenIds={contract}"
+        r = requests.get(url, timeout=10)
+
+        if r.status_code != 200:
+            return None
+
+        data = r.json()
+
+        if not data:
+            return None
+
+        market = data[0]
+
+        return {
+            "event": market.get("eventSlug", "Unknown Event"),
+            "question": market.get("question", "Unknown Market"),
+            "yes_price": market.get("outcomes", [{}])[0].get("price", "N/A"),
+            "no_price": market.get("outcomes", [{}])[-1].get("price", "N/A"),
         }
-        requests.post(url, json=payload, timeout=10)
+
     except:
-        pass
+        return None
 
-# ================================
-# UPDATE WALLET STATS
-# ================================
+# =============================
+# SETTINGS
+# =============================
 
-def update_wallet(wallet, amount):
-    if wallet not in wallet_stats:
-        wallet_stats[wallet] = {
-            "total_volume": 0,
-            "total_trades": 0,
-            "avg_trade_size": 0,
-            "last_active": datetime.utcnow()
-        }
+CLUSTER_WINDOW = 3600
+CLUSTER_THRESHOLD = 2
+LARGE_TRADE_THRESHOLD = 1000
 
-    stats = wallet_stats[wallet]
+trade_clusters = defaultdict(list)
+last_block = w3.eth.block_number
 
-    stats["total_volume"] += amount
-    stats["total_trades"] += 1
-    stats["avg_trade_size"] = stats["total_volume"] / stats["total_trades"]
-    stats["last_active"] = datetime.utcnow()
+send_telegram(f"🚀 Monitoring Started\nWallets: {len(SMART_WALLETS)}")
 
-# ================================
-# CALCULATE WALLET SCORE
-# ================================
-
-def calculate_score(stats):
-    volume_weight = 0.5
-    trade_weight = 0.3
-    conviction_weight = 0.2
-
-    return (
-        volume_weight * stats["total_volume"]
-        + trade_weight * stats["total_trades"] * 100
-        + conviction_weight * stats["avg_trade_size"]
-    )
-
-# ================================
-# GET TOP 500
-# ================================
-
-def get_top_wallets():
-    scored = []
-
-    for wallet, stats in wallet_stats.items():
-        score = calculate_score(stats)
-        scored.append((wallet, score))
-
-    scored.sort(key=lambda x: x[1], reverse=True)
-
-    return [w[0] for w in scored[:TOP_WALLET_LIMIT]]
-
-# ================================
-# CLUSTER DETECTION
-# ================================
-
-def check_cluster(wallet, amount):
-    now = datetime.utcnow()
-    cluster_memory.append((wallet, now))
-
-    # remove old entries
-    cluster_memory[:] = [
-        entry for entry in cluster_memory
-        if now - entry[1] < timedelta(minutes=CLUSTER_WINDOW_MINUTES)
-    ]
-
-    unique_wallets = set([entry[0] for entry in cluster_memory])
-
-    if len(unique_wallets) >= CLUSTER_THRESHOLD:
-        send_telegram(
-            f"🔥 CLUSTER ALERT\n\n"
-            f"{len(unique_wallets)} Top Wallets Active\n"
-            f"Window: {CLUSTER_WINDOW_MINUTES} min\n"
-            f"Potential coordinated move detected"
-        )
-        cluster_memory.clear()
-
-# ================================
+# =============================
 # MAIN LOOP
-# ================================
+# =============================
 
-def main_loop():
-    global last_dashboard
+while True:
+    try:
+        current_block = w3.eth.block_number
 
-    latest_block = w3.eth.block_number
+        if current_block > last_block:
+            for block_num in range(last_block + 1, current_block + 1):
+                block = w3.eth.get_block(block_num, full_transactions=True)
 
-    while True:
-        try:
-            current_block = w3.eth.block_number
+                for tx in block.transactions:
+                    from_addr = tx["from"].lower()
 
-            if current_block > latest_block:
-                for block_number in range(latest_block + 1, current_block + 1):
-                    block = w3.eth.get_block(block_number, full_transactions=True)
+                    if from_addr in SMART_WALLETS:
 
-                    for tx in block.transactions:
-                        if tx.to and tx.to.lower() == USDC_CONTRACT.lower():
-                            value = tx.value / 1e6
+                        contract = tx["to"]
+                        direction = "YES"
 
-                            if value >= MIN_TRADE_SIZE:
-                                wallet = tx["from"]
+                        key = (contract, direction)
+                        trade_clusters[key].append((from_addr, time.time()))
 
-                                update_wallet(wallet, value)
+                        trade_clusters[key] = [
+                            (w, t)
+                            for w, t in trade_clusters[key]
+                            if time.time() - t <= CLUSTER_WINDOW
+                        ]
 
-                                top_wallets = get_top_wallets()
+                        unique_wallets = set(w for w, _ in trade_clusters[key])
 
-                                if wallet in top_wallets:
-                                    send_telegram(
-                                        f"🚨 LARGE TRADE\n\n"
-                                        f"Wallet: {wallet}\n"
-                                        f"Size: ${int(value)}\n"
-                                        f"Block: {block_number}\n"
-                                        f"https://polygonscan.com/tx/{tx.hash.hex()}"
-                                    )
+                        if len(unique_wallets) >= CLUSTER_THRESHOLD:
 
-                                    check_cluster(wallet, value)
+                            market_info = fetch_market_info(contract)
 
-                latest_block = current_block
+                            if market_info:
+                                send_telegram(
+                                    f"🔥 CLUSTER ALERT\n\n"
+                                    f"Event: {market_info['event']}\n"
+                                    f"Market: {market_info['question']}\n"
+                                    f"Direction: {direction}\n"
+                                    f"YES Price: {market_info['yes_price']}\n"
+                                    f"NO Price: {market_info['no_price']}\n"
+                                    f"Wallets: {len(unique_wallets)}\n"
+                                    f"Contract: {contract}"
+                                )
+                            else:
+                                send_telegram(
+                                    f"🔥 CLUSTER ALERT\n"
+                                    f"Contract: {contract}\n"
+                                    f"Wallets: {len(unique_wallets)}"
+                                )
 
-            # Dashboard every 10 min
-            if time.time() - last_dashboard > 600:
-                top_wallets = get_top_wallets()
+            last_block = current_block
 
-                send_telegram(
-                    f"📊 INTERNAL LEADERBOARD UPDATE\n\n"
-                    f"Tracked Wallets: {len(wallet_stats)}\n"
-                    f"Top Wallets: {len(top_wallets)}\n"
-                    f"Min Trade Size: ${MIN_TRADE_SIZE}"
-                )
+        time.sleep(3)
 
-                last_dashboard = time.time()
-
-            time.sleep(5)
-
-        except Exception as e:
-            print("Error:", e)
-            time.sleep(5)
-
-# ================================
-# START ENGINE
-# ================================
-
-send_telegram("🧠 Internal Smart Wallet Leaderboard Engine Started")
-
-main_loop()
+    except Exception as e:
+        print("Error:", e)
+        time.sleep(5)
