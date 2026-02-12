@@ -15,7 +15,7 @@ CHAT_ID = "7154046718"
 
 BLOCK_DELAY = 4
 
-# Known Polymarket Core Contracts (Polygon Mainnet)
+# Known Polymarket Contracts
 POLYMARKET_CONTRACTS = {
     "0x4d97dcd97ec945f40cf65f87097ace5ea0476045",  # Exchange
     "0x8b9805a2f595b6705e74f7310829f2d299d21522",  # Conditional Tokens
@@ -55,6 +55,11 @@ SMART_WALLETS = {
 
 SMART_WALLETS = {w.lower() for w in SMART_WALLETS}
 
+# Convert wallet addresses to topic format (32-byte padded)
+WALLET_TOPICS = {
+    "0x" + "0" * 24 + w[2:].lower() for w in SMART_WALLETS
+}
+
 # ============================
 # CONNECT
 # ============================
@@ -87,10 +92,10 @@ def send_telegram(message):
 # ============================
 
 def monitor():
-    print("🧠 Polymarket Contract-Based Engine Online")
+    print("🧠 Log-Based Smart Wallet Engine Online")
     print(f"Tracking {len(SMART_WALLETS)} wallets")
 
-    send_telegram(f"🚀 Monitoring {len(SMART_WALLETS)} smart wallets on Polymarket")
+    send_telegram(f"🚀 Monitoring {len(SMART_WALLETS)} wallets (log-based detection)")
 
     last_block = w3.eth.block_number
     print(f"Starting from block: {last_block}")
@@ -103,33 +108,27 @@ def monitor():
 
                 for block_number in range(last_block + 1, current_block + 1):
 
-                    block = w3.eth.get_block(block_number, full_transactions=True)
+                    block = w3.eth.get_block(block_number, full_transactions=False)
 
-                    for tx in block.transactions:
+                    for tx_hash in block.transactions:
 
-                        sender = tx.get("from")
-                        if not sender:
-                            continue
+                        receipt = w3.eth.get_transaction_receipt(tx_hash)
 
-                        sender = sender.lower()
+                        for log in receipt["logs"]:
 
-                        if sender in SMART_WALLETS:
+                            contract_address = log["address"].lower()
 
-                            receipt = w3.eth.get_transaction_receipt(tx["hash"])
+                            if contract_address not in POLYMARKET_CONTRACTS:
+                                continue
 
-                            for log in receipt["logs"]:
-                                contract_address = log["address"].lower()
-
-                                if contract_address in POLYMARKET_CONTRACTS:
-
-                                    tx_hash = tx["hash"].hex()
+                            for topic in log["topics"]:
+                                if topic.hex().lower() in WALLET_TOPICS:
 
                                     message = (
-                                        "🎯 POLYMARKET INTERACTION DETECTED\n\n"
-                                        f"Wallet: {sender}\n"
-                                        f"Contract: {contract_address}\n"
+                                        "🎯 POLYMARKET SMART WALLET TRADE DETECTED\n\n"
+                                        f"Wallet involved in contract: {contract_address}\n"
                                         f"Block: {block_number}\n"
-                                        f"https://polygonscan.com/tx/{tx_hash}"
+                                        f"https://polygonscan.com/tx/{tx_hash.hex()}"
                                     )
 
                                     print(message)
@@ -152,7 +151,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Polymarket Smart Wallet Engine Running"
+    return "Smart Wallet Engine Running"
 
 threading.Thread(target=monitor, daemon=True).start()
 
