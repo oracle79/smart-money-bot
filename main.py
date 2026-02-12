@@ -15,9 +15,13 @@ CHAT_ID = "7154046718"
 
 BLOCK_DELAY = 4
 
-ERC1155_TRANSFER_SINGLE = Web3.keccak(
-    text="TransferSingle(address,address,address,uint256,uint256)"
-).hex()
+# Known Polymarket Core Contracts (Polygon Mainnet)
+POLYMARKET_CONTRACTS = {
+    "0x4d97dcd97ec945f40cf65f87097ace5ea0476045",  # Exchange
+    "0x8b9805a2f595b6705e74f7310829f2d299d21522",  # Conditional Tokens
+}
+
+POLYMARKET_CONTRACTS = {c.lower() for c in POLYMARKET_CONTRACTS}
 
 SMART_WALLETS = {
     "0xdb27bf2ac5d428a9c63dbc914611036855a6c56e",
@@ -83,10 +87,10 @@ def send_telegram(message):
 # ============================
 
 def monitor():
-    print("🧠 Receipt-Based Smart Wallet Engine Online")
+    print("🧠 Polymarket Contract-Based Engine Online")
     print(f"Tracking {len(SMART_WALLETS)} wallets")
 
-    send_telegram(f"🚀 Receipt Monitoring Started ({len(SMART_WALLETS)} wallets)")
+    send_telegram(f"🚀 Monitoring {len(SMART_WALLETS)} smart wallets on Polymarket")
 
     last_block = w3.eth.block_number
     print(f"Starting from block: {last_block}")
@@ -114,14 +118,14 @@ def monitor():
                             receipt = w3.eth.get_transaction_receipt(tx["hash"])
 
                             for log in receipt["logs"]:
+                                contract_address = log["address"].lower()
 
-                                if log["topics"] and log["topics"][0].hex() == ERC1155_TRANSFER_SINGLE:
+                                if contract_address in POLYMARKET_CONTRACTS:
 
                                     tx_hash = tx["hash"].hex()
-                                    contract_address = log["address"]
 
                                     message = (
-                                        "🎯 POLYMARKET ERC1155 TRADE DETECTED\n\n"
+                                        "🎯 POLYMARKET INTERACTION DETECTED\n\n"
                                         f"Wallet: {sender}\n"
                                         f"Contract: {contract_address}\n"
                                         f"Block: {block_number}\n"
@@ -148,7 +152,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Receipt Smart Wallet Engine Running"
+    return "Polymarket Smart Wallet Engine Running"
 
 threading.Thread(target=monitor, daemon=True).start()
 
