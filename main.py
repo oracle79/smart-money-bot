@@ -13,11 +13,11 @@ ALCHEMY_URL = "https://polygon-mainnet.g.alchemy.com/v2/5C0VcEocSzKMERi35xguh"
 TELEGRAM_TOKEN = "YOUR_TELEGRAM_TOKEN"
 CHAT_ID = "YOUR_CHAT_ID"
 
-ALERT_THRESHOLD = 1000  # $1K
+ALERT_THRESHOLD = 1000  # $1,000+
 POLL_INTERVAL = 4
 
-CONDITIONAL_TOKENS = Web3.to_checksum_address(
-    "0xCeAfDD6bc0bEF976fdCd1112955828E00543c0Ce"
+CTF_ADDRESS = Web3.to_checksum_address(
+    "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"
 )
 
 # ERC1155 TransferSingle ABI
@@ -47,11 +47,12 @@ if not w3.is_connected():
     raise Exception("Failed to connect to Polygon")
 
 ctf_contract = w3.eth.contract(
-    address=CONDITIONAL_TOKENS,
+    address=CTF_ADDRESS,
     abi=CTF_ABI
 )
 
 print("Connected to Polygon")
+print(f"Monitoring CTF contract: {CTF_ADDRESS}")
 
 # =========================
 # TELEGRAM
@@ -69,8 +70,8 @@ def send_telegram(message):
 # =========================
 
 def monitor():
-    print("🎯 ERC1155 Transfer Monitor Online")
-    send_telegram("🚀 ERC1155 Trade Monitor Started")
+    print("🎯 Polymarket ERC1155 Monitor Online")
+    send_telegram("🚀 Polymarket ERC1155 Monitor Started")
 
     last_block = w3.eth.block_number
 
@@ -92,21 +93,24 @@ def monitor():
                     token_id = event["args"]["id"]
                     raw_value = event["args"]["value"]
 
-                    # ERC1155 shares use 6 decimals like USDC
-                    amount = raw_value / 1_000_000
+                    # Polymarket positions use 6 decimals
+                    shares = raw_value / 1_000_000
 
-                    print(f"Transfer detected: {amount} shares | TokenID: {token_id}")
+                    print(
+                        f"Transfer detected | Shares: {shares:.2f} | "
+                        f"From: {from_addr} | To: {to_addr}"
+                    )
 
-                    if amount >= ALERT_THRESHOLD:
+                    if shares >= ALERT_THRESHOLD:
 
                         tx_hash = event["transactionHash"].hex()
 
                         message = (
                             "🔥 POLYMARKET LARGE POSITION TRANSFER\n\n"
+                            f"Shares: {shares:,.0f}\n"
                             f"From: {from_addr}\n"
                             f"To: {to_addr}\n"
                             f"TokenID: {token_id}\n"
-                            f"Size: {amount:,.0f} shares\n"
                             f"Block: {event['blockNumber']}\n\n"
                             f"https://polygonscan.com/tx/{tx_hash}"
                         )
@@ -133,7 +137,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "ERC1155 Monitor Running"
+    return "Polymarket ERC1155 Monitor Running"
 
 threading.Thread(target=monitor, daemon=True).start()
 
