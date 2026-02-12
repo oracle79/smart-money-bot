@@ -13,24 +13,25 @@ ALCHEMY_URL = "https://polygon-mainnet.g.alchemy.com/v2/5C0VcEocSzKMERi35xguh"
 TELEGRAM_TOKEN = "YOUR_TELEGRAM_TOKEN"
 CHAT_ID = "YOUR_CHAT_ID"
 
-ALERT_THRESHOLD = 1000  # $1,000+
-POLL_INTERVAL = 5
+ALERT_THRESHOLD = 1000  # $1K
+POLL_INTERVAL = 4
 
 CONDITIONAL_TOKENS = Web3.to_checksum_address(
     "0xCeAfDD6bc0bEF976fdCd1112955828E00543c0Ce"
 )
 
-# Minimal ABI for PositionSplit (mint event)
+# ERC1155 TransferSingle ABI
 CTF_ABI = [
     {
         "anonymous": False,
         "inputs": [
-            {"indexed": True, "name": "stakeholder", "type": "address"},
-            {"indexed": False, "name": "collateralToken", "type": "address"},
-            {"indexed": False, "name": "conditionId", "type": "bytes32"},
-            {"indexed": False, "name": "amount", "type": "uint256"}
+            {"indexed": True, "name": "operator", "type": "address"},
+            {"indexed": True, "name": "from", "type": "address"},
+            {"indexed": True, "name": "to", "type": "address"},
+            {"indexed": False, "name": "id", "type": "uint256"},
+            {"indexed": False, "name": "value", "type": "uint256"}
         ],
-        "name": "PositionSplit",
+        "name": "TransferSingle",
         "type": "event"
     }
 ]
@@ -68,8 +69,8 @@ def send_telegram(message):
 # =========================
 
 def monitor():
-    print("🎯 ConditionalTokens Monitor Online")
-    send_telegram("🚀 Polymarket Position Monitor Started")
+    print("🎯 ERC1155 Transfer Monitor Online")
+    send_telegram("🚀 ERC1155 Trade Monitor Started")
 
     last_block = w3.eth.block_number
 
@@ -79,29 +80,33 @@ def monitor():
 
             if latest_block > last_block:
 
-                events = ctf_contract.events.PositionSplit().get_logs(
+                events = ctf_contract.events.TransferSingle().get_logs(
                     from_block=last_block + 1,
                     to_block=latest_block
                 )
 
                 for event in events:
 
-                    stakeholder = event["args"]["stakeholder"]
-                    raw_amount = event["args"]["amount"]
+                    from_addr = event["args"]["from"]
+                    to_addr = event["args"]["to"]
+                    token_id = event["args"]["id"]
+                    raw_value = event["args"]["value"]
 
-                    # USDC = 6 decimals
-                    usdc_amount = raw_amount / 1_000_000
+                    # ERC1155 shares use 6 decimals like USDC
+                    amount = raw_value / 1_000_000
 
-                    print(f"PositionSplit detected: ${usdc_amount:,.2f}")
+                    print(f"Transfer detected: {amount} shares | TokenID: {token_id}")
 
-                    if usdc_amount >= ALERT_THRESHOLD:
+                    if amount >= ALERT_THRESHOLD:
 
                         tx_hash = event["transactionHash"].hex()
 
                         message = (
-                            "🔥 POLYMARKET POSITION MINT\n\n"
-                            f"Wallet: {stakeholder}\n"
-                            f"Size: ${usdc_amount:,.0f}\n"
+                            "🔥 POLYMARKET LARGE POSITION TRANSFER\n\n"
+                            f"From: {from_addr}\n"
+                            f"To: {to_addr}\n"
+                            f"TokenID: {token_id}\n"
+                            f"Size: {amount:,.0f} shares\n"
                             f"Block: {event['blockNumber']}\n\n"
                             f"https://polygonscan.com/tx/{tx_hash}"
                         )
@@ -128,7 +133,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "ConditionalTokens Monitor Running"
+    return "ERC1155 Monitor Running"
 
 threading.Thread(target=monitor, daemon=True).start()
 
