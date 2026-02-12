@@ -2,9 +2,10 @@ import os
 import time
 import requests
 from web3 import Web3
+from web3.middleware import ExtraDataToPOAMiddleware
 
 # ================================
-# ENV VARIABLES (DO NOT CHANGE NAMES)
+# ENV VARIABLES
 # ================================
 
 RPC = os.getenv("RPC")
@@ -18,18 +19,21 @@ if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
     raise Exception("Telegram credentials not set")
 
 # ================================
-# CONNECT TO POLYGON
+# CONNECT TO POLYGON (POA FIXED)
 # ================================
 
 w3 = Web3(Web3.HTTPProvider(RPC))
 
+# THIS FIXES YOUR ERROR
+w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
+
 if not w3.is_connected():
-    raise Exception("Failed to connect to Polygon RPC")
+    raise Exception("Failed to connect to Polygon")
 
 print("Connected to Polygon")
 
 # ================================
-# TELEGRAM FUNCTION
+# TELEGRAM
 # ================================
 
 def send_telegram(message):
@@ -44,10 +48,10 @@ def send_telegram(message):
         print("Telegram error:", e)
 
 # ================================
-# SMART WALLETS (YOUR 26)
+# SMART WALLETS
 # ================================
 
-SMART_WALLETS = set([
+SMART_WALLETS = {
     "0xdb27bf2ac5d428a9c63dbc914611036855a6c56e",
     "0x6a72f61820b26b1fe4d956e17b6dc2a1ea3033ee",
     "0x14964aefa2cd7caff7878b3820a690a03c5aa429",
@@ -74,7 +78,7 @@ SMART_WALLETS = set([
     "0x96489abcb9f583d6835c8ef95ffc923d05a86825",
     "0x3b5c629f114098b0dee345fb78b7a3a013c7126e",
     "0x1057e7d3ddafc60a4aeb10a2bc5b543792449ea5",
-])
+}
 
 SMART_WALLETS = {w.lower() for w in SMART_WALLETS}
 
@@ -86,13 +90,13 @@ LARGE_TRADE_THRESHOLD_USD = 1000
 last_seen_block = w3.eth.block_number
 
 # ================================
-# SIMPLE USD ESTIMATE (MATIC approx)
+# SIMPLE USD ESTIMATION
 # ================================
 
 def estimate_usd(tx):
     try:
         value_matic = w3.from_wei(tx["value"], "ether")
-        matic_price_estimate = 0.8  # simple placeholder
+        matic_price_estimate = 0.8
         return float(value_matic) * matic_price_estimate
     except:
         return 0
@@ -110,8 +114,6 @@ send_telegram(
 Polygon Block: {last_seen_block}
 Tracking Wallets: {len(SMART_WALLETS)}"""
 )
-
-print("Monitoring smart wallets...")
 
 heartbeat_timer = time.time()
 
@@ -154,7 +156,7 @@ Tx: https://polygonscan.com/tx/{tx['hash'].hex()}"""
 
         # Heartbeat every 30 seconds
         if time.time() - heartbeat_timer > 30:
-            print(f"Engine alive | Current Block {current_block}")
+            print(f"Engine alive | Block {current_block}")
             heartbeat_timer = time.time()
 
         time.sleep(5)
