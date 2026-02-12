@@ -32,27 +32,23 @@ print("Connected to Polygon")
 print("Current Block:", w3.eth.block_number)
 
 # ============================
-# SMART WALLET (ONLY ONE)
+# SMART WALLETS (3)
 # ============================
 
-SMART_WALLET = w3.to_checksum_address(
-    "0x6d3c5bd13984b2de47c3a88ddc455309aab3d294"
-)
+SMART_WALLETS = {
+    w3.to_checksum_address("0x6d3c5bd13984b2de47c3a88ddc455309aab3d294"),
+    w3.to_checksum_address("0xee613b3fc183ee44f9da9c05f53e2da107e3debf"),
+    w3.to_checksum_address("0x204f72f35326db932158cba6adff0b9a1da95e14"),
+}
 
-print("Tracking Wallet:", SMART_WALLET)
+print("Tracking Wallets:", len(SMART_WALLETS))
 
 # ============================
-# POLYMARKET CONTRACTS
+# POLYMARKET CONTRACT
 # ============================
 
-# Polymarket Exchange Proxy (main trading contract)
 POLYMARKET_EXCHANGE = w3.to_checksum_address(
     "0x4bfb41d5b3570defd03c39a9a4d8de6bd8b8982e"
-)
-
-# USDC on Polygon
-USDC = w3.to_checksum_address(
-    "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
 )
 
 # ============================
@@ -70,13 +66,19 @@ def send_telegram(message):
     except Exception as e:
         print("Telegram error:", e)
 
-send_telegram("🧠 Smart Wallet Engine Started\nTracking 1 wallet (Polymarket trades only)")
+send_telegram(
+    "🧠 Smart Wallet Engine Started\n"
+    f"Tracking {len(SMART_WALLETS)} wallets (Polymarket only)"
+)
 
 # ============================
 # POLYMARKET API FETCH
 # ============================
 
 def fetch_market_info(condition_id):
+    if not condition_id:
+        return None, None, None
+
     try:
         url = f"https://gamma-api.polymarket.com/markets?conditionId={condition_id}"
         r = requests.get(url, timeout=10)
@@ -85,8 +87,11 @@ def fetch_market_info(condition_id):
         if isinstance(data, list) and len(data) > 0:
             market = data[0]
             event_name = market.get("question", "Unknown Event")
-            yes_price = market.get("outcomePrices", {}).get("YES")
-            no_price = market.get("outcomePrices", {}).get("NO")
+
+            prices = market.get("outcomePrices", {})
+            yes_price = prices.get("YES")
+            no_price = prices.get("NO")
+
             return event_name, yes_price, no_price
 
     except Exception as e:
@@ -112,52 +117,25 @@ while True:
 
                 for tx in block.transactions:
 
-                    # Only monitor smart wallet
-                    if tx["from"] != SMART_WALLET:
+                    # Only monitor smart wallets
+                    if tx["from"] not in SMART_WALLETS:
                         continue
 
-                    # Only Polymarket contract
+                    # Only Polymarket exchange
                     if tx["to"] != POLYMARKET_EXCHANGE:
                         continue
 
                     print("🔥 Polymarket trade detected")
 
                     tx_hash = tx["hash"].hex()
+                    wallet = tx["from"]
 
-                    # Get receipt for logs
                     receipt = w3.eth.get_transaction_receipt(tx_hash)
 
                     direction = "UNKNOWN"
                     condition_id = None
 
-                    # Basic log scan (simplified detection)
+                    # Basic log scan (placeholder decoding)
                     for log in receipt.logs:
                         if log["address"] == POLYMARKET_EXCHANGE:
-                            # crude direction detection via topics
-                            if len(log["topics"]) > 0:
-                                direction = "YES or NO (decoded via contract log)"
-                                condition_id = log["topics"][1].hex()
-
-                    # Fetch event info
-                    event_name, yes_price, no_price = fetch_market_info(condition_id)
-
-                    message = (
-                        "🚨 POLYMARKET SMART TRADE\n\n"
-                        f"Wallet: {SMART_WALLET}\n"
-                        f"Direction: {direction}\n"
-                        f"Event: {event_name}\n"
-                        f"YES Price: {yes_price}\n"
-                        f"NO Price: {no_price}\n\n"
-                        f"Tx: https://polygonscan.com/tx/{tx_hash}"
-                    )
-
-                    send_telegram(message)
-
-            last_block = current_block
-
-        print("Engine alive | Block", current_block)
-        time.sleep(2)
-
-    except Exception as e:
-        print("Loop error:", e)
-        time.sleep(5)
+                            if len(log["topics"]()
