@@ -13,22 +13,12 @@ ALCHEMY_URL = "https://polygon-mainnet.g.alchemy.com/v2/5C0VcEocSzKMERi35xguh"
 TELEGRAM_TOKEN = "8520159588:AAGD8tjEWwDpStwKHQTx8fvXLvRL-5WS3MI"
 CHAT_ID = "7154046718"
 
-POLL_INTERVAL = 6
-USDC_DECIMALS = 6
-ALERT_THRESHOLD = 1000  # $1,000
+ALERT_THRESHOLD_USD = 1000
+POLL_INTERVAL = 5
 
-# Polygon USDC Contract
-USDC_ADDRESS = Web3.to_checksum_address(
-    "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
+EXCHANGE_ADDRESS = Web3.to_checksum_address(
+    "0x4bfb41d5b3570defd03c39a9a4d8de6bd8b8982e"
 )
-
-# Known Polymarket Exchange Contract
-POLYMARKET_EXCHANGE = Web3.to_checksum_address(
-    "0x4d97dcd97ec945f40cf65f87097ace5ea0476045"
-)
-
-# ERC20 Transfer event signature
-TRANSFER_TOPIC = Web3.keccak(text="Transfer(address,address,uint256)").hex()
 
 # =========================
 # CONNECT
@@ -54,12 +44,21 @@ def send_telegram(message):
         print("Telegram error:", e)
 
 # =========================
-# MONITOR USDC TRANSFERS
+# EVENT SIGNATURE
+# =========================
+
+# Fill event signature
+FILL_TOPIC = Web3.keccak(
+    text="Fill(address,address,address,uint256,uint256,uint256,uint256)"
+).hex()
+
+# =========================
+# MONITOR
 # =========================
 
 def monitor():
-    print("💰 Whale Monitor Online")
-    send_telegram("🚀 Polymarket $10k+ Whale Monitor Started")
+    print("🎯 Polymarket Whale Trade Monitor Online")
+    send_telegram("🚀 $10k+ Polymarket Trade Monitor Started")
 
     last_block = w3.eth.block_number
 
@@ -72,33 +71,42 @@ def monitor():
                 logs = w3.eth.get_logs({
                     "fromBlock": last_block + 1,
                     "toBlock": latest_block,
-                    "address": USDC_ADDRESS,
-                    "topics": [TRANSFER_TOPIC]
+                    "address": EXCHANGE_ADDRESS,
+                    "topics": [FILL_TOPIC]
                 })
 
                 for log in logs:
 
-                    to_address = "0x" + log["topics"][2].hex()[-40:]
-                    value = int(log["data"], 16) / (10 ** USDC_DECIMALS)
+                    tx_hash = log["transactionHash"].hex()
 
-                    if (
-                        Web3.to_checksum_address(to_address) == POLYMARKET_EXCHANGE
-                        and value >= ALERT_THRESHOLD
-                    ):
+                    # Decode raw values from data
+                    data = log["data"]
 
-                        tx_hash = log["transactionHash"].hex()
-                        from_address = "0x" + log["topics"][1].hex()[-40:]
+                    # Each uint256 is 32 bytes
+                    values = [
+                        int(data[i:i+64], 16)
+                        for i in range(2, len(data), 64)
+                    ]
 
-                        message = (
-                            "🐋 POLYMARKET WHALE BET DETECTED\n\n"
-                            f"Trader: {from_address}\n"
-                            f"Amount: ${value:,.0f}\n"
-                            f"Block: {log['blockNumber']}\n"
-                            f"https://polygonscan.com/tx/{tx_hash}"
-                        )
+                    # Polymarket Fill event structure:
+                    # values[0] = makerAmount
+                    # values[1] = takerAmount
+                    # (USDC is 6 decimals)
 
-                        print(message)
-                        send_telegram(message)
+                    if len(values) >= 2:
+                        usdc_amount = values[1] / 1_000_000
+
+                        if usdc_amount >= ALERT_THRESHOLD_USD:
+
+                            message = (
+                                "🐋 POLYMARKET WHALE TRADE\n\n"
+                                f"Size: ${usdc_amount:,.0f}\n"
+                                f"Block: {log['blockNumber']}\n"
+                                f"https://polygonscan.com/tx/{tx_hash}"
+                            )
+
+                            print(message)
+                            send_telegram(message)
 
                 last_block = latest_block
 
@@ -117,7 +125,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Whale Monitor Running"
+    return "Polymarket Whale Monitor Running"
 
 threading.Thread(target=monitor, daemon=True).start()
 
