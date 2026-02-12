@@ -15,7 +15,10 @@ SMART_WALLETS = {
 TELEGRAM_TOKEN = "8520159588:AAGD8tjEWwDpStwKHQTx8fvXLvRL-5WS3MI"
 TELEGRAM_CHAT_ID = "7154046718"
 
-MIN_TRADE_USD = 1  # $1 threshold for testing
+POLY_API_KEY = "019c4faf-4286-782b-84dd-6548ea1b8e7c"
+
+MIN_TRADE_USD = 1
+
 
 # ==============================
 # TELEGRAM
@@ -34,21 +37,23 @@ def send_telegram(message):
 
 
 # ==============================
-# FETCH TRADES (FIXED)
+# FETCH TRADES
 # ==============================
 
 def fetch_recent_trades():
     url = "https://clob.polymarket.com/trades?limit=50"
 
+    headers = {
+        "Authorization": f"Bearer {POLY_API_KEY}"
+    }
+
     try:
-        r = requests.get(url, timeout=10)
+        r = requests.get(url, headers=headers, timeout=10)
         data = r.json()
 
-        # API sometimes wraps trades inside "data"
         if isinstance(data, dict) and "data" in data:
             return data["data"]
 
-        # If already list
         if isinstance(data, list):
             return data
 
@@ -65,9 +70,14 @@ def fetch_recent_trades():
 # ==============================
 
 def fetch_market_info(market_id):
+    url = f"https://clob.polymarket.com/markets/{market_id}"
+
+    headers = {
+        "Authorization": f"Bearer {POLY_API_KEY}"
+    }
+
     try:
-        url = f"https://clob.polymarket.com/markets/{market_id}"
-        r = requests.get(url, timeout=10)
+        r = requests.get(url, headers=headers, timeout=10)
         data = r.json()
 
         if not isinstance(data, dict):
