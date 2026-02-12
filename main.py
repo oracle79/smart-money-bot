@@ -1,12 +1,15 @@
 import os
 import time
 import requests
+from collections import defaultdict
+from datetime import datetime, timedelta
+
 from web3 import Web3
 from web3.middleware import ExtraDataToPOAMiddleware
 
-# ================================
+# ==============================
 # ENV VARIABLES
-# ================================
+# ==============================
 
 RPC = os.getenv("RPC")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -15,43 +18,31 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 if not RPC:
     raise Exception("RPC not set")
 
-if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-    raise Exception("Telegram credentials not set")
-
-# ================================
-# CONNECT TO POLYGON (POA FIXED)
-# ================================
+# ==============================
+# WEB3 SETUP (POA FIXED)
+# ==============================
 
 w3 = Web3(Web3.HTTPProvider(RPC))
-
-# THIS FIXES YOUR ERROR
 w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
 
 if not w3.is_connected():
-    raise Exception("Failed to connect to Polygon")
+    raise Exception("Web3 not connected")
 
 print("Connected to Polygon")
 
-# ================================
-# TELEGRAM
-# ================================
+# ==============================
+# POLYMARKET EXCHANGE
+# ==============================
 
-def send_telegram(message):
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        payload = {
-            "chat_id": TELEGRAM_CHAT_ID,
-            "text": message
-        }
-        requests.post(url, data=payload, timeout=10)
-    except Exception as e:
-        print("Telegram error:", e)
+EXCHANGE = Web3.to_checksum_address(
+    "0x4d97dcd97ec945f40cf65f87097ace5ea0476045"
+)
 
-# ================================
-# SMART WALLETS
-# ================================
+# ==============================
+# SMART WALLETS (YOUR 26)
+# ==============================
 
-SMART_WALLETS = {
+SMART_WALLETS = set([
     "0xdb27bf2ac5d428a9c63dbc914611036855a6c56e",
     "0x6a72f61820b26b1fe4d956e17b6dc2a1ea3033ee",
     "0x14964aefa2cd7caff7878b3820a690a03c5aa429",
@@ -78,88 +69,158 @@ SMART_WALLETS = {
     "0x96489abcb9f583d6835c8ef95ffc923d05a86825",
     "0x3b5c629f114098b0dee345fb78b7a3a013c7126e",
     "0x1057e7d3ddafc60a4aeb10a2bc5b543792449ea5",
-}
+])
 
-SMART_WALLETS = {w.lower() for w in SMART_WALLETS}
+SMART_WALLETS = set(Web3.to_checksum_address(w) for w in SMART_WALLETS)
 
-# ================================
-# SETTINGS
-# ================================
+# ==============================
+# TELEGRAM
+# ==============================
 
-LARGE_TRADE_THRESHOLD_USD = 1000
-last_seen_block = w3.eth.block_number
-
-# ================================
-# SIMPLE USD ESTIMATION
-# ================================
-
-def estimate_usd(tx):
+def send_telegram(msg):
     try:
-        value_matic = w3.from_wei(tx["value"], "ether")
-        matic_price_estimate = 0.8
-        return float(value_matic) * matic_price_estimate
-    except:
-        return 0
+        requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            json={
+                "chat_id": TELEGRAM_CHAT_ID,
+                "text": msg,
+                "parse_mode": "Markdown"
+            },
+            timeout=10
+        )
+    except Exception as e:
+        print("Telegram error:", e)
 
-# ================================
-# START ENGINE
-# ================================
+# ==============================
+# MARKET DATA
+# ==============================
+
+def get_market_data(token_id):
+    try:
+        url = f"https://gamma-api.polymarket.com/markets/{token_id}"
+        r = requests.get(url, timeout=5)
+        if r.status_code == 200:
+            data = r.json()
+            return {
+                "event": data.get("question", "Unknown"),
+                "yes": data.get("outcomes", [{}])[0].get("price", "N/A"),
+                "no": data.get("outcomes", [{}])[1].get("price", "N/A"),
+            }
+    except:
+        pass
+    return {"event": "Unknown", "yes": "N/A", "no": "N/A"}
+
+# ==============================
+# TRADE MEMORY
+# ==============================
+
+trade_history = []
+WINDOW = timedelta(hours=1)
+
+# ==============================
+# ENGINE START
+# ==============================
 
 print("🧠 Smart Wallet Quant Engine Online")
-print("Polygon Block:", last_seen_block)
+print("Polygon Block:", w3.eth.block_number)
 print("Tracking Wallets:", len(SMART_WALLETS))
 
 send_telegram(
-    f"""🧠 Smart Wallet Quant Engine Online
-Polygon Block: {last_seen_block}
-Tracking Wallets: {len(SMART_WALLETS)}"""
+    f"🧠 Smart Wallet Engine Online\n"
+    f"Block: {w3.eth.block_number}\n"
+    f"Tracking: {len(SMART_WALLETS)} wallets"
 )
 
-heartbeat_timer = time.time()
+last_block = w3.eth.block_number
 
-# ================================
+# ==============================
 # MAIN LOOP
-# ================================
+# ==============================
 
 while True:
     try:
         current_block = w3.eth.block_number
 
-        if current_block > last_seen_block:
+        if current_block > last_block:
 
-            for block_num in range(last_seen_block + 1, current_block + 1):
-
+            for block_num in range(last_block + 1, current_block + 1):
                 block = w3.eth.get_block(block_num, full_transactions=True)
 
                 for tx in block.transactions:
 
-                    from_addr = tx["from"].lower()
-                    to_addr = tx["to"].lower() if tx["to"] else None
+                    if not tx.to:
+                        continue
 
-                    if from_addr in SMART_WALLETS or (to_addr and to_addr in SMART_WALLETS):
+                    if tx.to.lower() != EXCHANGE.lower():
+                        continue
 
-                        est_usd = estimate_usd(tx)
+                    sender = Web3.to_checksum_address(tx["from"])
 
-                        if est_usd >= LARGE_TRADE_THRESHOLD_USD:
+                    if sender not in SMART_WALLETS:
+                        continue
 
-                            alert = f"""🚨 LARGE SMART WALLET TRADE
+                    value_usd = float(w3.from_wei(tx.value, "ether")) * 3000
 
-Wallet: {from_addr}
-Estimated Size: ${round(est_usd,2)}
-Block: {block_num}
-Tx: https://polygonscan.com/tx/{tx['hash'].hex()}"""
+                    if value_usd < 1000:
+                        continue
 
-                            print(alert)
-                            send_telegram(alert)
+                    timestamp = datetime.utcnow()
 
-            last_seen_block = current_block
+                    trade = {
+                        "wallet": sender,
+                        "size": value_usd,
+                        "block": block_num,
+                        "tx": tx.hash.hex(),
+                        "time": timestamp,
+                        "contract": tx.input[:10],
+                        "direction": "UNKNOWN"
+                    }
 
-        # Heartbeat every 30 seconds
-        if time.time() - heartbeat_timer > 30:
-            print(f"Engine alive | Block {current_block}")
-            heartbeat_timer = time.time()
+                    trade_history.append(trade)
 
-        time.sleep(5)
+                    # Remove old trades
+                    trade_history[:] = [
+                        t for t in trade_history
+                        if timestamp - t["time"] <= WINDOW
+                    ]
+
+                    # Cluster detection
+                    same_contract = [
+                        t for t in trade_history
+                        if t["contract"] == trade["contract"]
+                    ]
+
+                    wallets_involved = set(t["wallet"] for t in same_contract)
+
+                    if len(wallets_involved) >= 2:
+                        market = get_market_data(trade["contract"])
+
+                        alert = (
+                            "🔥 CLUSTER DETECTED 🔥\n\n"
+                            f"Wallets: {len(wallets_involved)}\n"
+                            f"Contract: {trade['contract']}\n"
+                            f"Event: {market['event']}\n"
+                            f"YES: {market['yes']} | NO: {market['no']}\n"
+                            f"Block: {block_num}"
+                        )
+
+                        send_telegram(alert)
+
+                    # Large trade alert
+                    send_telegram(
+                        f"🚨 LARGE TRADE\n\n"
+                        f"Wallet: {sender}\n"
+                        f"Size: ${round(value_usd,2)}\n"
+                        f"Block: {block_num}\n"
+                        f"https://polygonscan.com/tx/{tx.hash.hex()}"
+                    )
+
+            last_block = current_block
+
+        if current_block % 20 == 0:
+            print("Engine alive | Block", current_block)
+
+        time.sleep(3)
 
     except Exception as e:
         print("Loop error:", e)
